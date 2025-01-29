@@ -77,7 +77,7 @@ class AdvancedMLTrader(Strategy):
         self.symbols = symbols
         self.cash_at_risk = cash_at_risk
         self.stable_allocation = stable_allocation
-        self.sleeptime = "42H"
+        self.sleeptime = "12H"
         self.spy_initialized = False  # Flag to ensure SPY is only initialized once
         self.last_trade = {symbol: None for symbol in symbols}
         self.api = REST(base_url=BASE_URL, key_id=API_KEY, secret_key=API_SECRET)
@@ -317,13 +317,17 @@ strategy = AdvancedMLTrader(
     "cash_at_risk": 1,
 }
 )
-strategy.backtest(
-    YahooDataBacktesting,
-    start_date,
-    end_date,
-    parameters = {
-    "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "SPY",  # Stable performers
-                "TSLA", "NVDA", "PLTR", "ARKK", "SQ"],   # Volatile stocks
-    "cash_at_risk": 1,
-}
-)
+#strategy.backtest(
+ #   YahooDataBacktesting,
+ #   start_date,
+ #   end_date,
+  #  parameters = {
+  #  "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "SPY",  # Stable performers
+  #              "TSLA", "NVDA", "PLTR", "ARKK", "SQ"],   # Volatile stocks
+  #  "cash_at_risk": 1,
+#}
+#)
+
+trader = AdvancedMLTrader()
+trader.add_strategy(strategy)
+trader.run_all()
