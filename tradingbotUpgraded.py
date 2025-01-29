@@ -1,5 +1,5 @@
 from lumibot.brokers import Alpaca
-from lumibot.backtesting import YahooDataBacktesting
+#from lumibot.backtesting import YahooDataBacktesting
 from lumibot.strategies.strategy import Strategy
 from datetime import datetime
 from alpaca_trade_api import REST
@@ -304,8 +304,8 @@ class AdvancedMLTrader(Strategy):
                 self.last_trade[symbol] = "sell"
 
 # Backtesting and running the strategy
-start_date = datetime(2020, 1, 1)
-end_date = datetime(2024, 12, 31)
+#start_date = datetime(2020, 1, 1)
+#end_date = datetime(2024, 12, 31)
 
 broker = Alpaca(ALPACA_CREDS)
 strategy = AdvancedMLTrader(
