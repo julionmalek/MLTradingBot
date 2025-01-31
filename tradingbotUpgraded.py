@@ -10,6 +10,7 @@ import numpy as np
 import logging
 import os
 import sys
+from lumibot.traders import Trader
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -46,8 +47,8 @@ def log_message(self, message, level="info"):
     log_func = log_levels.get(level.lower(), logger.info)
     log_func(message)
 
-API_KEY = "PKWHJN0D9KIYXVJBSAP6"
-API_SECRET = "Y4nUWLqtCs3rF2huXfAGudLcxjAkR8bxccQdhHvK"
+API_KEY = "PKLCNW0XLBL0U9AFUBRZ" 
+API_SECRET = "06zB23MhXVAVlR3XRsBcQSzUnYNefy60bMMGx6Ge" 
 BASE_URL = "https://paper-api.alpaca.markets"
 
 ALPACA_CREDS = {
@@ -328,6 +329,6 @@ strategy = AdvancedMLTrader(
 #}
 #)
 
-trader = AdvancedMLTrader()
+trader = Trader()
 trader.add_strategy(strategy)
 trader.run_all()
