@@ -47,8 +47,8 @@ def log_message(self, message, level="info"):
     log_func = log_levels.get(level.lower(), logger.info)
     log_func(message)
 
-API_KEY = "PKLCNW0XLBL0U9AFUBRZ" 
-API_SECRET = "06zB23MhXVAVlR3XRsBcQSzUnYNefy60bMMGx6Ge" 
+API_KEY = "PK8M3M11V85V4XH2G8WH" 
+API_SECRET = "3hjKZmhQa7J4DKESCozdUmSoEYlnqFbr6ZzfNawK" 
 BASE_URL = "https://paper-api.alpaca.markets"
 
 ALPACA_CREDS = {
@@ -85,7 +85,7 @@ class AdvancedMLTrader(Strategy):
         self.initialize_spy()
 
     def position_sizing(self, symbol: str):
-        cash = self.get_cash()
+        cash = float(self.api.get_account().cash)        
         allocated_cash = cash * proportions.get(symbol, 0)
         last_price = self.get_last_price(symbol)
 
@@ -145,7 +145,7 @@ class AdvancedMLTrader(Strategy):
             logging.error("SPY already initialized. Skipping.")
             return
 
-        spy_cash = self.get_cash() * self.stable_allocation
+        spy_cash = float(self.api.get_account().cash) * self.stable_allocation
         logging.error(f"Allocating {spy_cash} to SPY")
         spy_price = self.get_last_price("SPY")
         logging.error(f"SPY Price: {spy_price}")
