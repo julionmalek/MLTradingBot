@@ -47,7 +47,7 @@ class AdvancedMLTrader(Strategy):
         self.api = REST(base_url=BASE_URL, key_id=API_KEY, secret_key=API_SECRET)
 
     def position_sizing(self, symbol: str):
-        cash = self.get_cash()
+        cash = float(self.api.get_account().cash)        
         allocated_cash = cash * proportions.get(symbol, 0)
         last_price = self.get_last_price(symbol)
 
