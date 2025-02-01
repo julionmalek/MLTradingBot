@@ -5,7 +5,8 @@ from datetime import datetime
 from alpaca_trade_api import REST
 from timedelta import Timedelta
 from finbert_utils import estimate_sentiment
-import talib
+#import talib
+import pandas_ta as ta
 import numpy as np
 import logging
 import os
@@ -79,7 +80,7 @@ class AdvancedMLTrader(Strategy):
         self.cash_at_risk = cash_at_risk
         self.stable_allocation = stable_allocation
         self.sleeptime = "12H"
-        self.spy_initialized = False  # Flag to ensure SPY is only initialized once
+        self.spy_initialized = True  # Flag to ensure SPY is only initialized once
         self.last_trade = {symbol: None for symbol in symbols}
         self.api = REST(base_url=BASE_URL, key_id=API_KEY, secret_key=API_SECRET)
         self.initialize_spy()
@@ -118,13 +119,13 @@ class AdvancedMLTrader(Strategy):
 
     def dynamic_risk_allocation(self):
         spy_prices = self.get_historical_prices("SPY", length=14, timestep="day").df["close"]
-        spy_rsi = talib.RSI(spy_prices, timeperiod=14)[-1]
+        spy_rsi = ta.RSI(spy_prices, timeperiod=14)[-1]
 
         if len(spy_prices) < 14:  # Ensure enough data for RSI calculation
             logging.error("Insufficient data for SPY RSI calculation. Skipping dynamic risk allocation.")
             return
 
-        spy_rsi = talib.RSI(spy_prices, timeperiod=14)[-1]
+        spy_rsi = ta.RSI(spy_prices, timeperiod=14)[-1]
         
         if np.isnan(spy_rsi):  # Handle NaN case
             logging.error("SPY RSI calculation returned NaN. Skipping dynamic risk allocation.")
@@ -171,9 +172,9 @@ class AdvancedMLTrader(Strategy):
                 logging.info(f"Not enough data to calculate RSI for {symbol}. Skipping.")
                 return None, None, None
 
-            rsi = talib.RSI(np.array(close_prices), timeperiod=14)[-1]
-            sma_20 = talib.SMA(np.array(close_prices), timeperiod=20)[-1] if len(close_prices) >= 20 else None
-            sma_50 = talib.SMA(np.array(close_prices), timeperiod=50)[-1] if len(close_prices) >= 50 else None
+            rsi = ta.RSI(np.array(close_prices), timeperiod=14)[-1]
+            sma_20 = ta.SMA(np.array(close_prices), timeperiod=20)[-1] if len(close_prices) >= 20 else None
+            sma_50 = ta.SMA(np.array(close_prices), timeperiod=50)[-1] if len(close_prices) >= 50 else None
 
             return rsi, sma_20, sma_50
         except Exception as e:
@@ -196,10 +197,10 @@ class AdvancedMLTrader(Strategy):
             close = prices_df["close"]
 
             # Calculate MACD
-            macd, macdsignal, _ = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
+            macd, macdsignal, _ = ta.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
 
             # Calculate ADX
-            adx_series = talib.ADX(high, low, close, timeperiod=14)
+            adx_series = ta.ADX(high, low, close, timeperiod=14)
 
             # Check if the ADX series has enough data and isn't empty
             if len(adx_series) == 0 or np.isnan(adx_series.iloc[-1]):
@@ -238,7 +239,7 @@ class AdvancedMLTrader(Strategy):
             close = prices_df["close"]
 
             # Calculate ATR
-            atr_series = talib.ATR(high, low, close, timeperiod=14)
+            atr_series = ta.ATR(high, low, close, timeperiod=14)
 
             # Check if ATR series is empty or NaN
             if atr_series.empty or np.isnan(atr_series.iloc[-1]):
