@@ -1,335 +1,486 @@
-from lumibot.brokers import Alpaca
-#from lumibot.backtesting import YahooDataBacktesting
-from lumibot.strategies.strategy import Strategy
-from datetime import datetime
-from alpaca_trade_api import REST
-from timedelta import Timedelta
-from finbert_utils import estimate_sentiment
-#import talib
-import pandas_ta as ta
-import numpy as np
-import logging
+"""
+Enhanced ML + Technical Strategy with Lumibot
+
+Features:
+- Allocates a portion of capital (25%) to SPY on initialize (buy & hold).
+- Uses FinBERT sentiment analysis to gauge bullish/bearish sentiment.
+- Incorporates multiple technical indicators for buy/sell decisions:
+    - RSI
+    - SMA(20) vs SMA(50)
+    - MACD
+    - ADX
+    - Bollinger Bands
+    - Stochastic Oscillator
+- Logs extensively for debugging/troubleshooting.
+- Demonstrates dynamic risk allocation based on SPY's RSI.
+"""
+
 import os
 import sys
-from lumibot.traders import Trader
+import logging
+import numpy as np
+from datetime import datetime
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Test logging
-logging.info("This is an INFO log.")
-logging.debug("This is a DEBUG log.")
-logging.warning("This is a WARNING log.")
-logging.error("This is an ERROR log.")
-# Configure logging
+# Utility Libraries
+from timedelta import Timedelta
+import talib as ta
+from finbert_utils import estimate_sentiment
+
+# --- Logging Setup (Console + standard format) ---
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),  # Output logs to terminal
-    ],
+    level=logging.DEBUG,
+    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-def log_message(self, message, level="info"):
-    """
-    Logs messages using Python's logging module.
-    """
-    logger = logging.getLogger(self.__class__.__name__)
-    
-    # Map levels to logging methods
-    log_levels = {
-        "debug": logger.debug,
-        "info": logger.info,
-        "warning": logger.warning,
-        "error": logger.error,
-        "critical": logger.critical,
-    }
+logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger("lumibot").setLevel(logging.DEBUG)
+logging.getLogger("alpaca").setLevel(logging.DEBUG)
+logging.getLogger("asyncio").setLevel(logging.DEBUG)
 
-    # Log the message
-    log_func = log_levels.get(level.lower(), logger.info)
-    log_func(message)
 
-API_KEY = "PK8M3M11V85V4XH2G8WH" 
-API_SECRET = "3hjKZmhQa7J4DKESCozdUmSoEYlnqFbr6ZzfNawK" 
+root_lvl = logging.getLogger().getEffectiveLevel()
+lumibot_lvl = logging.getLogger("lumibot").getEffectiveLevel()
+alpaca_lvl = logging.getLogger("alpaca").getEffectiveLevel()
+asyncio_lvl = logging.getLogger("asyncio").getEffectiveLevel()
+
+print("ROOT LOGGER LEVEL:", root_lvl)        # e.g. 10 == DEBUG, 20 == INFO, ...
+print("LUMIBOT LOGGER LEVEL:", lumibot_lvl)
+print("ALPACA LOGGER LEVEL:", alpaca_lvl)
+print("ASYNCIO LOGGER LEVEL:", asyncio_lvl)
+
+# Lumibot / Alpaca
+from lumibot.brokers import Alpaca
+from lumibot.backtesting import YahooDataBacktesting
+from lumibot.strategies.strategy import Strategy
+from lumibot.traders import Trader
+from alpaca_trade_api import REST
+
+# --- Alpaca Credentials ---
+# Ideally, load these from environment variables or a .env file
+API_KEY = os.environ.get("ALPACA_API_KEY")
+API_SECRET = os.environ.get("ALPACA_API_SECRET")
 BASE_URL = "https://paper-api.alpaca.markets"
 
+# The dictionary for the Alpaca broker
 ALPACA_CREDS = {
-    "API_KEY": API_KEY,
-    "API_SECRET": API_SECRET,
-    "PAPER": True,
+  "API_KEY": API_KEY,
+  "API_SECRET": API_SECRET,
+  "PAPER": True,
 }
 
+# --- Proportions / Allocation for each symbol ---
+# This dictionary says how much of your total *available cash* you want in each symbol
 proportions = {
     # Stable and Well-Performing Stocks
-    "AAPL": 0.10,  # Apple
-    "MSFT": 0.10,  # Microsoft
-    "GOOGL": 0.10,  # Google
-    "AMZN": 0.10,  # Amazon
-    "SPY": 0.20,  # S&P 500 ETF (stable base allocation)
+    "AAPL": 0.10,  
+    "MSFT": 0.10,  
+    "GOOGL": 0.10,  
+    "AMZN": 0.10,  
+    "SPY": 0.20,   # S&P 500 ETF (stable base allocation)
 
-    # Volatile Stocks
-    "TSLA": 0.15,  # Tesla
-    "NVDA": 0.10,  # NVIDIA
-    "PLTR": 0.05,  # Palantir
-    "ARKK": 0.05,  # ARK Innovation ETF
-    "SQ": 0.05,  # Block (Square)
+    # More Volatile / Growth Stocks
+    "TSLA": 0.15,  
+    "NVDA": 0.10,  
+    "PLTR": 0.05,  
+    "ARKK": 0.05,  
+    "SQ": 0.05,    
 }
 
+
 class AdvancedMLTrader(Strategy):
-    def initialize(self, symbols: list, cash_at_risk: float = 1, stable_allocation: float = 0.25):
+    """
+    A multi-factor strategy combining:
+      - Sentiment (FinBERT)
+      - RSI, SMAs, MACD, ADX
+      - Bollinger Bands & Stochastic for additional signals
+      - A dynamic risk allocation based on SPY RSI
+
+    The strategy invests 25% of capital into SPY at init (buy & hold),
+    then trades other symbols based on technical + sentiment conditions.
+    """
+
+    def initialize(self, symbols, cash_at_risk=1.0, stable_allocation=0.25):
+        """
+        :param symbols: The list of symbols to trade.
+        :param cash_at_risk: The fraction of total cash we are willing to risk.
+        :param stable_allocation: The fraction of our total cash to put into SPY initially.
+        """
         self.symbols = symbols
         self.cash_at_risk = cash_at_risk
         self.stable_allocation = stable_allocation
-        self.sleeptime = "12H"
-        self.spy_initialized = True  # Flag to ensure SPY is only initialized once
+
+        # This determines how frequently we run the iteration
+        self.sleeptime = "12H"  # every 12 hours in live trading
+
+        # We will track if we already allocated to SPY
+        self.spy_initialized = False
+
+        # Keep track of last action for each symbol
         self.last_trade = {symbol: None for symbol in symbols}
+
+        # Alpaca API for real-time account/positions
         self.api = REST(base_url=BASE_URL, key_id=API_KEY, secret_key=API_SECRET)
+
+        logging.error("Initialization complete. Attempting to buy SPY with stable allocation.")
         self.initialize_spy()
+        logging.error("this is an errorq")
 
-    def position_sizing(self, symbol: str):
-        cash = float(self.api.get_account().cash)        
-        allocated_cash = cash * proportions.get(symbol, 0)
-        last_price = self.get_last_price(symbol)
-
-        #logging.error(f"Cash: {cash}, Allocated Cash: {allocated_cash}, Last Price for {symbol}: {last_price}")
-
-        if last_price is None:
-            logging.error(f"Failed to retrieve last price for {symbol}")
-            return cash, None, None
-
-        quantity = round(allocated_cash / last_price, 0)
-        return cash, last_price, quantity
-    
-    def get_dates(self):
-        today = self.get_datetime()
-        three_days_prior = today - Timedelta(days=3)
-        return today.strftime("%Y-%m-%d"), three_days_prior.strftime("%Y-%m-%d")
-
-    def get_sentiment(self, symbol: str):
-        today, three_days_prior = self.get_dates()
-        try:
-            news = self.api.get_news(symbol=symbol, start=three_days_prior, end=today)
-            news = [ev.__dict__["_raw"]["headline"] for ev in news]
-            probability, sentiment = estimate_sentiment(news)
-        except Exception as e:
-            logging.error(f"Sentiment analysis failed for {symbol}: {e}")
-            probability, sentiment = 0.5, "neutral"
-        logging.error(f"Sentiment for {symbol}: {sentiment} with probability {probability}")
-        return probability, sentiment
-
-
-    def dynamic_risk_allocation(self):
-        spy_prices = self.get_historical_prices("SPY", length=14, timestep="day").df["close"]
-        spy_rsi = ta.RSI(spy_prices, timeperiod=14)[-1]
-
-        if len(spy_prices) < 14:  # Ensure enough data for RSI calculation
-            logging.error("Insufficient data for SPY RSI calculation. Skipping dynamic risk allocation.")
-            return
-
-        spy_rsi = ta.RSI(spy_prices, timeperiod=14)[-1]
-        
-        if np.isnan(spy_rsi):  # Handle NaN case
-            logging.error("SPY RSI calculation returned NaN. Skipping dynamic risk allocation.")
-            return
-
-        if spy_rsi > 70:
-            self.cash_at_risk = 1  # Reduce risk
-        elif spy_rsi < 30:
-            self.cash_at_risk = 1  # Increase risk
-        else:
-            self.cash_at_risk = 1
-
-        logging.error(f"Dynamic Risk Allocation: cash_at_risk adjusted to {self.cash_at_risk} based on SPY RSI {spy_rsi}")
 
     def initialize_spy(self):
-        """Invest 30% of cash into SPY at the beginning and hold."""
+        """Invest stable_allocation% of cash into SPY at the beginning and hold."""
         if self.spy_initialized:
             logging.error("SPY already initialized. Skipping.")
             return
 
-        spy_cash = float(self.api.get_account().cash) * self.stable_allocation
-        logging.error(f"Allocating {spy_cash} to SPY")
+        account_info = self.api.get_account()
+        current_cash = self.get_cash()
+        spy_cash = current_cash * self.stable_allocation
+
+        logging.error(f"Current Cash: {current_cash:.2f}, allocating {spy_cash:.2f} to SPY.")
+
         spy_price = self.get_last_price("SPY")
-        logging.error(f"SPY Price: {spy_price}")
-        if spy_price is not None:
-            spy_quantity = round(spy_cash / spy_price, 0)
-            logging.error(f"SPY Quantity: {spy_quantity}")
-            order = self.create_order("SPY", spy_quantity, "buy", type="trailing_stop", trail_percent=0.30)
+        logging.error(f"Retrieved SPY price: {spy_price}")
+
+        if spy_price is None:
+            logging.error("Failed to get SPY price; cannot initialize SPY.")
+            return
+
+        spy_quantity = round(spy_cash / spy_price, 0)
+        logging.error(f"Buying {spy_quantity} shares of SPY at approx. ${spy_price:.2f} each.")
+
+        if spy_quantity > 0:
+            order = self.create_order(
+                "SPY",
+                spy_quantity,
+                "buy",
+                type="market",
+            )
             self.submit_order(order)
-            logging.error(f"Initialized SPY: Allocated {spy_quantity} shares at price {spy_price}")
-            self.spy_initialized = True
+            logging.error("SPY initial allocation order submitted.")
         else:
-            logging.error("Failed to initialize SPY: Could not fetch price.")
+            logging.warning("Calculated SPY quantity is 0. Not placing order.")
 
-    def calculate_technical_indicators(self, symbol: str):
+        self.spy_initialized = True
+
+    def position_sizing(self, symbol):
+        """
+        Calculates how many shares to buy given the proportion in `proportions`
+        and the current account cash.
+        """
+        account_info = self.api.get_account()
+        cash = self.get_cash()
+        symbol_prop = proportions.get(symbol, 0)
+
+        allocated_cash = cash * symbol_prop
+        last_price = self.get_last_price(symbol)
+
+        logging.error(f"[position_sizing] Symbol={symbol}, "
+                     f"Cash={cash:.2f}, "
+                     f"AllocPct={symbol_prop}, "
+                     f"AllocCash={allocated_cash:.2f}, "
+                     f"LastPrice={last_price}")
+
+        if last_price is None or last_price <= 0:
+            logging.error(f"[position_sizing] Invalid price ({last_price}) for {symbol}.")
+            return cash, None, 0
+
+        quantity = round(allocated_cash / last_price, 0)
+        return cash, last_price, quantity
+
+    def dynamic_risk_allocation(self):
+        """
+        Dynamically adjust self.cash_at_risk based on SPY RSI:
+          - If SPY RSI > 70 => reduce risk
+          - If SPY RSI < 30 => increase risk
+          - Otherwise leave risk at 1 (default).
+        """
+        prices = self.get_historical_prices("SPY", length=14, timestep="day").df
+        if len(prices) < 14:
+            logging.warning("Not enough SPY data for RSI => skip dynamic_risk_allocation.")
+            return
+
+        spy_rsi_val = ta.RSI(prices["close"], timeperiod=14)[-1]
+
+        if spy_rsi_val is None or np.isnan(spy_rsi_val):
+            logging.warning("SPY RSI returned NaN => skip dynamic_risk_allocation.")
+            return
+
+        logging.error(f"[dynamic_risk_allocation] Current SPY RSI={spy_rsi_val:.2f}")
+
+        if spy_rsi_val > 70:
+            self.cash_at_risk = 0.5  # example: reduce risk to 50% if overbought
+            logging.error("SPY RSI>70 => Decreasing risk to 0.5")
+        elif spy_rsi_val < 30:
+            self.cash_at_risk = 1.2  # example: slightly increase risk if oversold
+            logging.error("SPY RSI<30 => Increasing risk to 1.2")
+        else:
+            self.cash_at_risk = 1.0  # normal
+            logging.error("SPY RSI in normal range => risk=1.0")
+
+    def get_dates(self, offset_days=3):
+        """
+        Returns (today_str, offset_str) for retrieving recent news for sentiment.
+        """
+        today = self.get_datetime()
+        past = today - Timedelta(days=offset_days)
+        return today.strftime("%Y-%m-%d"), past.strftime("%Y-%m-%d")
+
+    def get_sentiment(self, symbol):
+        """
+        Uses FinBERT to analyze recent news headlines. Returns (probability, sentiment).
+        """
+        today_str, past_str = self.get_dates()
         try:
-            prices_df = self.get_historical_prices(asset=symbol, length=50, timestep="day").df
-            if len(prices_df) == 0:
-                logging.info(f"No historical data for {symbol}. Skipping technical indicators calculation.")
-                return None, None, None
-
-            close_prices = prices_df["close"]
-            if len(close_prices) < 14:  # Ensure sufficient data for RSI calculation
-                logging.info(f"Not enough data to calculate RSI for {symbol}. Skipping.")
-                return None, None, None
-
-            rsi = ta.RSI(np.array(close_prices), timeperiod=14)[-1]
-            sma_20 = ta.SMA(np.array(close_prices), timeperiod=20)[-1] if len(close_prices) >= 20 else None
-            sma_50 = ta.SMA(np.array(close_prices), timeperiod=50)[-1] if len(close_prices) >= 50 else None
-
-            return rsi, sma_20, sma_50
+            news_items = self.api.get_news(symbol=symbol, start=past_str, end=today_str)
+            headlines = [item.__dict__["_raw"]["headline"] for item in news_items]
+            probability, sentiment = estimate_sentiment(headlines)
         except Exception as e:
-            logging.error(f"Error in calculate_technical_indicators for {symbol}: {e}")
+            logging.error(f"[get_sentiment] Sentiment analysis failed for {symbol}: {e}")
+            return 0.5, "neutral"
+
+        logging.error(f"[get_sentiment] {symbol} => Sentiment='{sentiment}', Prob={probability:.2f}")
+        return probability, sentiment
+
+    # --------------------------
+    #  Technical Indicators
+    # --------------------------
+    def calculate_technical_indicators(self, symbol):
+        """
+        Returns (rsi, sma20, sma50) for the last data point.
+        """
+        try:
+            hist_df = self.get_historical_prices(symbol, length=50, timestep="day").df
+            if len(hist_df) < 50:
+                logging.warning(f"[calc_tech_indicators] Not enough data ({len(hist_df)}) for {symbol}.")
+                return None, None, None
+
+            close_prices = hist_df["close"]
+            rsi_val = ta.RSI(close_prices, timeperiod=14)[-1]
+            sma20_val = ta.SMA(close_prices, timeperiod=20)[-1]
+            sma50_val = ta.SMA(close_prices, timeperiod=50)[-1]
+
+            logging.debug(f"[calc_tech_indicators] {symbol} => RSI={rsi_val:.2f}, "
+                          f"SMA20={sma20_val:.2f}, SMA50={sma50_val:.2f}")
+            return rsi_val, sma20_val, sma50_val
+        except Exception as ex:
+            logging.error(f"[calc_tech_indicators] Error for {symbol}: {ex}")
             return None, None, None
 
-    def calculate_momentum_indicators(self, symbol: str):
+    def calculate_momentum_indicators(self, symbol):
+        """
+        Returns (macd_val, macd_signal_val, adx_val) for the last data point.
+        """
         try:
-            # Get historical prices
-            prices_df = self.get_historical_prices(asset=symbol, length=50, timestep="day").df
-
-            # Ensure there is enough data for calculation
-            if len(prices_df) < 50:
-                logging.error(f"Not enough data for {symbol} to calculate momentum indicators. Skipping.")
+            hist_df = self.get_historical_prices(symbol, length=50, timestep="day").df
+            if len(hist_df) < 50:
+                logging.warning(f"[calc_momentum] Not enough data ({len(hist_df)}) for {symbol}.")
                 return None, None, None
 
-            # Extract high, low, and close prices
-            high = prices_df["high"]
-            low = prices_df["low"]
-            close = prices_df["close"]
+            high = hist_df["high"]
+            low = hist_df["low"]
+            close = hist_df["close"]
 
-            # Calculate MACD
-            macd, macdsignal, _ = ta.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-
-            # Calculate ADX
+            macd, macd_signal, macd_hist = ta.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
             adx_series = ta.ADX(high, low, close, timeperiod=14)
 
-            # Check if the ADX series has enough data and isn't empty
-            if len(adx_series) == 0 or np.isnan(adx_series.iloc[-1]):
-                logging.error(f"ADX calculation returned empty or NaN for {symbol}. Skipping.")
-                return (
-                    macd.iloc[-1] if len(macd) > 0 else None,
-                    macdsignal.iloc[-1] if len(macdsignal) > 0 else None,
-                    None,
-                )
+            # Last data points
+            macd_val = macd.iloc[-1]
+            macd_signal_val = macd_signal.iloc[-1]
+            adx_val = adx_series.iloc[-1]
 
-            # Ensure MACD series also has data
-            if len(macd) == 0 or len(macdsignal) == 0:
-                logging.error(f"MACD calculation returned empty for {symbol}. Skipping.")
-                return None, None, None
-
-            # Return the last values of MACD, signal line, and ADX
-            return macd.iloc[-1], macdsignal.iloc[-1], adx_series.iloc[-1]
-
+            logging.debug(f"[calc_momentum] {symbol} => MACD={macd_val:.2f}, "
+                          f"Signal={macd_signal_val:.2f}, ADX={adx_val:.2f}")
+            return macd_val, macd_signal_val, adx_val
         except Exception as e:
-            logging.error(f"Error in calculate_momentum_indicators for {symbol}: {e}")
+            logging.error(f"[calc_momentum] Error for {symbol}: {e}")
             return None, None, None
 
-    def calculate_atr(self, symbol: str):
+    def calculate_volatility_indicators(self, symbol):
+        """
+        Returns (atr_val, upper_bb, lower_bb, stoch_k, stoch_d) as a sample of added signals.
+        - ATR for volatility
+        - Bollinger Bands
+        - Stochastic (K, D)
+        """
         try:
-            # Get historical prices
-            prices_df = self.get_historical_prices(asset=symbol, length=50, timestep="day").df
+            hist_df = self.get_historical_prices(symbol, length=50, timestep="day").df
+            if len(hist_df) < 20:
+                logging.warning(f"[calc_volatility_indicators] Not enough data for {symbol}.")
+                return None, None, None, None, None
 
-            # Ensure there is enough data
-            if len(prices_df) < 14:  # ATR requires at least 14 periods
-                logging.error(f"Not enough data for {symbol} to calculate ATR. Skipping.")
-                return None
+            high = hist_df["high"]
+            low = hist_df["low"]
+            close = hist_df["close"]
 
-            # Extract high, low, and close prices
-            high = prices_df["high"]
-            low = prices_df["low"]
-            close = prices_df["close"]
-
-            # Calculate ATR
+            # ATR (timeperiod=14)
             atr_series = ta.ATR(high, low, close, timeperiod=14)
+            atr_val = atr_series.iloc[-1]
 
-            # Check if ATR series is empty or NaN
-            if atr_series.empty or np.isnan(atr_series.iloc[-1]):
-                logging.error(f"ATR calculation returned empty or NaN for {symbol}. Skipping.")
-                return None
+            # Bollinger Bands (timeperiod=20)
+            upper_bb, mid_bb, lower_bb = ta.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
 
-            # Return the last ATR value
-            return atr_series.iloc[-1]
+            # Stochastic
+            slowk, slowd = ta.STOCH(
+                high, low, close,
+                fastk_period=14, slowk_period=3, slowk_matype=0,
+                slowd_period=3, slowd_matype=0
+            )
+            stoch_k = slowk.iloc[-1]
+            stoch_d = slowd.iloc[-1]
 
+            logging.debug(f"[calc_volatility_indicators] {symbol} => ATR={atr_val:.2f}, "
+                          f"UpperBB={upper_bb.iloc[-1]:.2f}, LowerBB={lower_bb.iloc[-1]:.2f}, "
+                          f"StochK={stoch_k:.2f}, StochD={stoch_d:.2f}")
+            return atr_val, upper_bb.iloc[-1], lower_bb.iloc[-1], stoch_k, stoch_d
         except Exception as e:
-            logging.error(f"Error in calculate_atr for {symbol}: {e}")
-            return None
+            logging.error(f"[calc_volatility_indicators] Error for {symbol}: {e}")
+            return None, None, None, None, None
 
+    # -----------------------------------------
+    #  Main logic on each trading iteration
+    # -----------------------------------------
     def on_trading_iteration(self):
+        # 1) Adjust risk based on SPY RSI
         self.dynamic_risk_allocation()
 
+        # 2) Evaluate each symbol
         for symbol in self.symbols:
-            if symbol == "SPY":  # Skip additional SPY trades since it's rebalanced
-                current_position = self.get_position(symbol)
-                current_position_quantity = current_position.quantity if current_position else 0
+            # Skip re-initializing SPY or trying to rebalance it every iteration
+            if symbol == "SPY":
                 continue
 
             cash, last_price, quantity = self.position_sizing(symbol)
-
-            if last_price is None:
-                logging.info(f"Skipping {symbol} due to missing price data")
+            if not last_price:
+                logging.error(f"[{symbol}] Missing price data; skipping this iteration.")
                 continue
 
+            # --- Get sentiment ---
             probability, sentiment = self.get_sentiment(symbol)
-            rsi, sma_20, sma_50 = self.calculate_technical_indicators(symbol)
-            macd, macdsignal, adx = self.calculate_momentum_indicators(symbol)
-            atr = self.calculate_atr(symbol)
 
-            # Check if technical indicators are valid before proceeding
-            if any(indicator is None for indicator in [rsi, sma_20, sma_50, macd, macdsignal, adx, atr]):
-                logging.error(f"Skipping {symbol} due to insufficient data for technical indicators.")
+            # --- Calculate technicals ---
+            rsi, sma20, sma50 = self.calculate_technical_indicators(symbol)
+            macd_val, macd_signal, adx_val = self.calculate_momentum_indicators(symbol)
+            atr_val, upper_bb, lower_bb, stoch_k, stoch_d = self.calculate_volatility_indicators(symbol)
+
+            if any(x is None for x in [rsi, sma20, sma50, macd_val, macd_signal, adx_val,
+                                       atr_val, upper_bb, lower_bb, stoch_k, stoch_d]):
+                logging.error(f"[{symbol}] Incomplete indicators => skipping trade logic.")
                 continue
 
-            # Check current holdings before making trades
-            current_position = self.get_position(symbol)
-            current_position_quantity = current_position.quantity if current_position else 0
+            # Log the technical snapshot
+            logging.error(
+                f"[{symbol}] Tech snapshot => "
+                f"Sentiment={sentiment}, Prob={probability:.2f}, "
+                f"RSI={rsi:.2f}, SMA20={sma20:.2f}, SMA50={sma50:.2f}, "
+                f"MACD={macd_val:.2f}, MACDSignal={macd_signal:.2f}, ADX={adx_val:.2f}, "
+                f"ATR={atr_val:.2f}, BB_Upper={upper_bb:.2f}, BB_Lower={lower_bb:.2f}, "
+                f"StochK={stoch_k:.2f}, StochD={stoch_d:.2f}"
+            )
 
-            # Buy logic
+            # Check current holdings
+            current_position = self.get_position(symbol)
+            logging.error(f"[{symbol}] Current Position: {current_position}")
+            current_quantity = current_position.quantity if current_position else 0
+            logging.error(f"[{symbol}] Current Quantity: {current_quantity}")
+
+            # Example Buy Criteria (feel free to tweak):
+            #   - Have enough cash for at least 1 share
+            #   - Positive sentiment with high confidence
+            #   - RSI < 60 (somewhat oversold)
+            #   - 20-day SMA above 50-day (positive trend)
+            #   - MACD > Signal line, ADX>25 => strong trend
+            #   - StochK < 25 => oversold
+            logging.error(f"[{symbol}] Cash={cash:.2f}, LastPrice={last_price:.2f}")
             if (
-                cash > last_price and sentiment == "positive" and probability > 0.8
-                and rsi < 70 and sma_20 > sma_50 and macd > macdsignal and adx > 25
-                and current_position_quantity == 0
+                cash > last_price
+                and sentiment == "positive" and probability > 0.7
+                and rsi < 70
+                and sma20 > sma50
+                and macd_val > macd_signal
+                and adx_val < 25
+                and stoch_k < 70
+                and current_quantity == 0
             ):
-                logging.error(f"Placing buy order for {symbol}: {quantity} units")
-                order = self.create_order(
-                    symbol, quantity, "buy", type="trailing_stop", trail_percent=0.05
+                logging.error(f"[{symbol}] Buy criteria met. Placing BUY order for {quantity} shares.")
+                buy_order = self.create_order(
+                    symbol,
+                    quantity,
+                    "buy",
+                    type="market",
                 )
-                self.submit_order(order)
+                self.submit_order(buy_order)
                 self.last_trade[symbol] = "buy"
 
-            # Sell logic
+            # Example Sell Criteria:
+            #   - Negative sentiment with decent confidence
+            #   - RSI > 80 => overbought
+            #   - SMA20 < SMA50 => downward trend
+            #   - MACD < signal => negative momentum
+            #   - ADX>20 => a trending environment (selling into a downward trend)
+            #   - StochK > 80 => overbought
             elif (
-                sentiment == "negative" and probability > 0.7 and rsi > 85
-                and sma_20 < sma_50 and macd < macdsignal and adx > 20
-                and current_position_quantity > 0
+                sentiment == "negative" and probability > 0.7
+                and rsi > 80
+                and sma20 < sma50
+                and macd_val < macd_signal
+                and adx_val > 20
+                and stoch_k > 80
+                and current_quantity > 0
             ):
-                logging.error(f"Selling all holdings for {symbol}")
-                self.sell_all()
+                logging.warning(f"[{symbol}] Sell criteria met. SELLING all holdings.")
+                sell_order = self.create_order(symbol, current_quantity, "sell")
+                self.submit_order(sell_order)
                 self.last_trade[symbol] = "sell"
 
-# Backtesting and running the strategy
-#start_date = datetime(2020, 1, 1)
-#end_date = datetime(2024, 12, 31)
 
+# ------------------
+#  Backtest Section
+# ------------------
+# Set the date range for backtesting
+start_date = datetime(2023, 11, 1)
+end_date = datetime(2023, 12, 31)
+
+# Create the broker instance using Alpaca credentials
 broker = Alpaca(ALPACA_CREDS)
-strategy = AdvancedMLTrader(
-    name="advanced_ml_trader",
-    broker=broker,
-    parameters = {
-    "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "SPY",  # Stable performers
-                "TSLA", "NVDA", "PLTR", "ARKK", "SQ"],   # Volatile stocks
-    "cash_at_risk": 1,
-}
-)
-#strategy.backtest(
- #   YahooDataBacktesting,
- #   start_date,
- #   end_date,
-  #  parameters = {
-  #  "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "SPY",  # Stable performers
-  #              "TSLA", "NVDA", "PLTR", "ARKK", "SQ"],   # Volatile stocks
-  #  "cash_at_risk": 1,
-#}
-#)
 
-trader = Trader()
-trader.add_strategy(strategy)
-trader.run_all()
+# Define the strategy and its parameters
+strategy = AdvancedMLTrader(
+    name="enhanced_ml_trader",
+    broker=broker,
+    benchmark="SPY",  # Explicitly setting benchmark
+
+    parameters={
+        "symbols": [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "SPY",  # stable performers
+            "TSLA", "NVDA", "PLTR", "ARKK", "SQ"     # volatile picks
+        ],
+        "cash_at_risk": 1.0,  # default risk
+        "stable_allocation": 0.25,  # 25% into SPY
+    },
+    debug=True,  # Enable debug mode
+
+)
+
+# Run a backtest with Yahoo data
+strategy.backtest(
+    YahooDataBacktesting,
+    start_date,
+    end_date,
+    parameters={
+        # Redundant here, but you can re-specify or override:
+        "symbols": [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "SPY",
+            "TSLA", "NVDA", "PLTR", "ARKK", "SQ"
+        ],
+        "cash_at_risk": 1.0,
+        "stable_allocation": 0.25,
+
+    },
+)
+
+    # If you want to run live/paper trading instead of backtesting, uncomment:
+    # trader = Trader()
+    # trader.add_strategy(strategy)
+    # trader.run_all()

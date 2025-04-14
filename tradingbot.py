@@ -2,7 +2,6 @@ from lumibot.brokers import Alpaca
 from lumibot.backtesting import YahooDataBacktesting
 from lumibot.strategies.strategy import Strategy
 from lumibot.traders import Trader
-from lumibot.brokers import Binance
 from datetime import datetime
 from alpaca_trade_api import REST
 from timedelta import Timedelta
@@ -10,6 +9,7 @@ from finbert_utils import estimate_sentiment
 import talib
 import numpy as np
 import logging
+import os
 
 # Configure logging to display INFO level logs in the terminal
 logging.basicConfig(
@@ -17,8 +17,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
-API_KEY = "PKWHJN0D9KIYXVJBSAP6"
-API_SECRET = "Y4nUWLqtCs3rF2huXfAGudLcxjAkR8bxccQdhHvK"
+API_KEY = os.environ.get("ALPACA_API_KEY")
+API_SECRET = os.environ.get("ALPACA_API_SECRET")
 BASE_URL = "https://paper-api.alpaca.markets"
 
 ALPACA_CREDS = {
