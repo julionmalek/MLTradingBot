@@ -20,6 +20,10 @@ import sys
 import logging
 import numpy as np
 from datetime import datetime
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import pandas as pd
+
 
 
 # Utility Libraries
@@ -362,8 +366,141 @@ class AdvancedMLTrader(Strategy):
             logging.error(f"[calc_volatility_indicators] Error for {symbol}: {e}")
             return None, None, None, None, None
 
+'''
+    # Clustering
+    def cluster_analysis(self):
+        # Set date range (same as backtest). Will need to pull this from a parameters file or something, instead of hard-coding.
+        start = datetime(2023, 11, 1)
+        end = datetime(2023, 12, 31)
+
+        stock_symbols = ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PLTR", "ARKK", "SQ"]
+
+        # Store each symbol’s processed DataFrame
+        stock_dfs = []
+
+        for symbol in stock_symbols:
+            data = YahooDataBacktesting.get_bars(self,
+                                                 assets=[symbol],  # list of assets
+                                                 length="1y",  # 1 year of data
+                                                 timestep="day",  # daily data
+                                                 include_after_hours=False  # No after-hours data
+                                                 )
+            
+            print(type(data))  # What is the type of 'data'?
+            print(data)  # Check its contents
 
 
+            df = pd.DataFrame(data)
+            df['date'] = pd.to_datetime(df['Date'])
+            df.set_index('date', inplace=True)
+
+
+            # Calculate technical indicators. Note that we can add more.
+            df[f'{symbol}_daily_return'] = df['Close'].pct_change()
+            df[f'{symbol}_volatility_5d'] = df[f'{symbol}_daily_return'].rolling(5).std()
+            
+            # RSI measures recent price changes to detect overbought (>70) or oversold (<30) conditions — often used to time entry/exit points.
+            df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+            
+            # MACD (Moving Average Convergence Divergence), track momentum, signals a shift in momentum.
+            df[f'{symbol}_MACD'] = ta.trend.MACD(df['Close']).macd_diff() 
+            
+            # ADX (Average Directional Index). Higher ADX = stronger trend (not direction), usually above 25.
+            df[f'{symbol}_ADX'] = ta.trend.ADXIndicator(df['High'], df['Low'], df['Close']).adx()
+            
+            # Envelops price with upper/lower bands based on standard deviation. Price touching the band signals volatility breakout/mean reversion.
+            bb = ta.volatility.BollingerBands(df['Close']) 
+            df[f'{symbol}_boll_width'] = bb.bollinger_hband() - bb.bollinger_lband()
+
+            # Keep only features + align by date
+            df = df[[f'{symbol}_daily_return', f'{symbol}_volatility_5d', f'{symbol}_RSI',
+                    f'{symbol}_MACD', f'{symbol}_ADX', f'{symbol}_boll_width']]
+            
+            # Add to full dataset
+            stock_dfs.append(df)
+
+        # Merge all stock features by date, drop missing values
+        combined = pd.concat(stock_dfs, axis=1)
+        combined = combined.dropna()
+
+        # Take average for each feature type
+        feature_types = ['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']
+        averaged_features = pd.DataFrame(index=combined.index)
+
+        for feature in feature_types:
+            cols = [col for col in combined.columns if feature in col]
+            averaged_features[feature] = combined[cols].mean(axis=1)
+
+        # Normalize features and cluster
+        scaler = StandardScaler().fit(averaged_features)
+        X_scaled = scaler.transform(averaged_features)
+
+        kmeans = KMeans(n_clusters=3, random_state=42)
+        regimes = kmeans.fit_predict(X_scaled)
+
+        # Add regimes back to the frame
+        averaged_features['regime'] = regimes
+
+        # Save models and regime labels
+        joblib.dump(scaler, 'regime_scaler.pkl')
+        joblib.dump(kmeans, 'regime_model.pkl')
+        averaged_features.to_csv("portfolio_clustered_regimes.csv")
+
+        return averaged_features
+
+    def plot_cluster(self):
+        """
+        Plots average daily return with shaded background regimes.
+        Assumes 'averaged_features' has columns: 'daily_return' and 'regime',
+        and uses the index as datetime.
+        """
+        # Ensure datetime index
+        averaged_features = self.cluster_analysis()
+        averaged_features.index = pd.to_datetime(averaged_features.index)
+
+        # Setup plot
+        fig, ax = plt.subplots(figsize=(14, 6))
+
+        # Plot average return
+        ax.plot(
+            averaged_features.index,
+            averaged_features['daily_return'],
+            label="Avg Daily Return",
+            color='black',
+            linewidth=1
+        )
+
+        # Define regime colors
+        unique_regimes = averaged_features['regime'].unique()
+        colors = ['#e6f7ff', '#fff2e6', '#e6ffe6', '#ffe6f0', '#f2e6ff']  # Extendable
+        y_min = averaged_features['daily_return'].min()
+        y_max = averaged_features['daily_return'].max()
+
+        # Shade by regime
+        for regime in unique_regimes:
+            mask = averaged_features['regime'] == regime
+            ax.fill_between(
+                averaged_features.index,
+                y_min,
+                y_max,
+                where=mask,
+                color=colors[regime % len(colors)],
+                alpha=0.3,
+                label=f"Regime {regime}"
+            )
+
+        # Format plot
+        ax.set_title("Average Daily Return with Regime Overlay")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Average Return")
+        ax.legend()
+        ax.grid(True)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        fig.autofmt_xdate()
+        plt.tight_layout()
+        plt.show()
+
+'''
     # -----------------------------------------
     #  Main logic on each trading iteration
     # -----------------------------------------
@@ -463,9 +600,6 @@ class AdvancedMLTrader(Strategy):
 
 
 
-
-
-
 # ------------------
 #  Backtest Section
 # ------------------
@@ -494,6 +628,10 @@ strategy = AdvancedMLTrader(
 
 )
 
+#strategy.plot_cluster()
+
+
+'''
 # Run a backtest with Yahoo data
 strategy.backtest(
     YahooDataBacktesting,
@@ -515,3 +653,5 @@ strategy.backtest(
     # trader = Trader()
     # trader.add_strategy(strategy)
     # trader.run_all()
+
+'''
