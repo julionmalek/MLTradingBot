@@ -191,6 +191,9 @@ class AdvancedMLTrader(Strategy):
 
     def dynamic_risk_allocation(self):
         """
+        RSI (Relative Strength Index)
+        → Measures recent price changes to detect overbought (>70) or oversold (<30) conditions — often used to time entry/exit points.
+
         Dynamically adjust self.cash_at_risk based on SPY RSI:
           - If SPY RSI > 70 => reduce risk
           - If SPY RSI < 30 => increase risk
@@ -229,6 +232,9 @@ class AdvancedMLTrader(Strategy):
 
     def get_sentiment(self, symbol):
         """
+        Sentiment (FinBERT)
+        → Uses an NLP model trained on financial text to score news or tweets as positive/neutral/negative — gauges the market’s tone toward a stock.
+
         Uses FinBERT to analyze recent news headlines. Returns (probability, sentiment).
         """
         today_str, past_str = self.get_dates()
@@ -249,6 +255,12 @@ class AdvancedMLTrader(Strategy):
     def calculate_technical_indicators(self, symbol):
         """
         Returns (rsi, sma20, sma50) for the last data point.
+        RSI (Relative Strength Index)
+        → Measures recent price changes to detect overbought (>70) or oversold (<30) conditions — often used to time entry/exit points.
+        
+        SMA (Simple Moving Average)
+        → Smooths price data over a defined window (e.g., 50-day SMA) to identify overall trends or crossovers (e.g., short SMA crossing above long SMA = bullish signal).
+
         """
         try:
             hist_df = self.get_historical_prices(symbol, length=50, timestep="day").df
@@ -270,6 +282,12 @@ class AdvancedMLTrader(Strategy):
 
     def calculate_momentum_indicators(self, symbol):
         """
+        MACD (Moving Average Convergence Divergence)
+        → Tracks momentum via two EMAs (e.g., 12-day and 26-day) — signals generated when MACD crosses the signal line (momentum shifts).
+
+        ADX (Average Directional Index)
+        → Measures the strength (but not direction) of a trend; higher ADX = stronger trend, usually above 25.
+
         Returns (macd_val, macd_signal_val, adx_val) for the last data point.
         """
         try:
@@ -299,6 +317,12 @@ class AdvancedMLTrader(Strategy):
 
     def calculate_volatility_indicators(self, symbol):
         """
+        Bollinger Bands
+        → Envelops price with upper/lower bands based on standard deviation — price touching the band often signals a volatility breakout or mean reversion.
+
+        Stochastic Oscillator
+        → Compares current price to its range over a period — useful for identifying momentum shifts, especially in ranging markets.
+
         Returns (atr_val, upper_bb, lower_bb, stoch_k, stoch_d) as a sample of added signals.
         - ATR for volatility
         - Bollinger Bands
@@ -337,6 +361,8 @@ class AdvancedMLTrader(Strategy):
         except Exception as e:
             logging.error(f"[calc_volatility_indicators] Error for {symbol}: {e}")
             return None, None, None, None, None
+
+
 
     # -----------------------------------------
     #  Main logic on each trading iteration
@@ -392,6 +418,7 @@ class AdvancedMLTrader(Strategy):
             #   - 20-day SMA above 50-day (positive trend)
             #   - MACD > Signal line, ADX>25 => strong trend
             #   - StochK < 25 => oversold
+            
             logging.error(f"[{symbol}] Cash={cash:.2f}, LastPrice={last_price:.2f}")
             if (
                 cash > last_price
@@ -433,6 +460,10 @@ class AdvancedMLTrader(Strategy):
                 sell_order = self.create_order(symbol, current_quantity, "sell")
                 self.submit_order(sell_order)
                 self.last_trade[symbol] = "sell"
+
+
+
+
 
 
 # ------------------
