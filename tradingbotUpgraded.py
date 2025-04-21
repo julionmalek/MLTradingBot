@@ -23,6 +23,8 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
+from zoneinfo import ZoneInfo
+
 
 
 
@@ -366,62 +368,85 @@ class AdvancedMLTrader(Strategy):
             logging.error(f"[calc_volatility_indicators] Error for {symbol}: {e}")
             return None, None, None, None, None
 
-'''
+
     # Clustering
     def cluster_analysis(self):
         # Set date range (same as backtest). Will need to pull this from a parameters file or something, instead of hard-coding.
-        start = datetime(2023, 11, 1)
-        end = datetime(2023, 12, 31)
+        start = datetime(2023, 11, 1, 0, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+        end = datetime(2023, 12, 31, 0, 0, 0, tzinfo=ZoneInfo("America/New_York"))
 
-        stock_symbols = ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PLTR", "ARKK", "SQ"]
+        # Calculate length in days
+        length = (end - start).days
 
-        # Store each symbol’s processed DataFrame
+        stock_symbols = ["SPY"] #, "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PLTR", "ARKK", "SQ"]
+
+        # Instantiate the data source
+        data_source = YahooDataBacktesting(start, end)
+        data = data_source.get_bars(assets=stock_symbols,
+                                    length=length,
+                                    timestep="day",
+                                    )
+        print("[DATA IMPORTED]")
+
         stock_dfs = []
 
-        for symbol in stock_symbols:
-            data = YahooDataBacktesting.get_bars(self,
-                                                 assets=[symbol],  # list of assets
-                                                 length="1y",  # 1 year of data
-                                                 timestep="day",  # daily data
-                                                 include_after_hours=False  # No after-hours data
-                                                 )
-            
-            print(type(data))  # What is the type of 'data'?
-            print(data)  # Check its contents
+        for key, df_raw in data.items():
+            # Convert to DataFrame
+            df_raw = data[key]
+            df = df_raw.df  # Convert Bars object to pandas DataFrame
+            print(df.head())
+            print(df.columns)
+
+            # Add symbol info in case you need it
+            df['symbol'] = str(key)
+
+            # Separate dataframe for each symbol
+            df.columns = df.columns.str.lower()
+
+            # Ensure datetime index, filter by the start and end date
+
+            print(f"Type of index: {type(df.index)}")
+            print(f"Index sample values: {df.index[:5]}")  # Check the first 5 values
+
+            ############################################################################################################################################################################
+            #DATE FILTERING DOESNT WORK
+            data_min, data_max = df.index.min(), df.index.max()
+            start = max(start, data_min)  # Set start to max of requested and available start
+            end = min(end, data_max)      # Set end to min of requested and available end
+
+            print(f"Data range: {df.index.min()} to {df.index.max()}")
+            print(f"Filtering between {start} and {end}")
 
 
-            df = pd.DataFrame(data)
-            df['date'] = pd.to_datetime(df['Date'])
-            df.set_index('date', inplace=True)
+            df.index = pd.to_datetime(df.index)
+            df = df[(df.index >= start) & (df.index <= end)]
+            print(df.head())
+            ############################################################################################################################################################################
 
+            print(f"[DATA PREPPED FOR SYMBOL {key}]")
 
             # Calculate technical indicators. Note that we can add more.
-            df[f'{symbol}_daily_return'] = df['Close'].pct_change()
-            df[f'{symbol}_volatility_5d'] = df[f'{symbol}_daily_return'].rolling(5).std()
-            
-            # RSI measures recent price changes to detect overbought (>70) or oversold (<30) conditions — often used to time entry/exit points.
-            df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-            
-            # MACD (Moving Average Convergence Divergence), track momentum, signals a shift in momentum.
-            df[f'{symbol}_MACD'] = ta.trend.MACD(df['Close']).macd_diff() 
-            
-            # ADX (Average Directional Index). Higher ADX = stronger trend (not direction), usually above 25.
-            df[f'{symbol}_ADX'] = ta.trend.ADXIndicator(df['High'], df['Low'], df['Close']).adx()
-            
-            # Envelops price with upper/lower bands based on standard deviation. Price touching the band signals volatility breakout/mean reversion.
-            bb = ta.volatility.BollingerBands(df['Close']) 
-            df[f'{symbol}_boll_width'] = bb.bollinger_hband() - bb.bollinger_lband()
+            df['daily_return'] = df['close'].pct_change() # Daily return
+            df['volatility_5d'] = df['daily_return'].rolling(5).std() # 5-day rolling volatility
+            df['RSI'] = ta.RSI(df['close'], timeperiod=14) # RSI measures recent price changes to detect overbought (>70) or oversold (<30) conditions — often used to time entry/exit points.
+            df['MACD'], df['MACD_signal'], df['MACD_hist'] = ta.MACD(df['close'], fastperiod=12, slowperiod=26, signalperiod=9) # MACD (Moving Average Convergence Divergence), track momentum, signals a shift in momentum.
+            df['ADX'] = ta.ADX(df['high'], df['low'], df['close'], timeperiod=14) # ADX (Average Directional Index). Higher ADX = stronger trend (not direction), usually above 25.
+            df['BB_upper'], df['BB_middle'], df['BB_lower'] = ta.BBANDS(df['close'], timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+            df['boll_width'] = df['BB_upper'] - df['BB_lower'] # Envelops price with upper/lower bands based on standard deviation. Price touching the band signals volatility breakout/mean reversion.
 
             # Keep only features + align by date
-            df = df[[f'{symbol}_daily_return', f'{symbol}_volatility_5d', f'{symbol}_RSI',
-                    f'{symbol}_MACD', f'{symbol}_ADX', f'{symbol}_boll_width']]
+            df = df[['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']]
             
+            print(f"[TECHNICAL INDICATORS CALCULATED FOR SYMBOL {key}]")
+
+            print(df)
             # Add to full dataset
             stock_dfs.append(df)
 
         # Merge all stock features by date, drop missing values
-        combined = pd.concat(stock_dfs, axis=1)
+        combined = pd.concat(stock_dfs, axis=1, keys=stock_symbols)
         combined = combined.dropna()
+        print(combined.head())
 
         # Take average for each feature type
         feature_types = ['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']
@@ -500,7 +525,7 @@ class AdvancedMLTrader(Strategy):
         plt.tight_layout()
         plt.show()
 
-'''
+
     # -----------------------------------------
     #  Main logic on each trading iteration
     # -----------------------------------------
@@ -628,7 +653,11 @@ strategy = AdvancedMLTrader(
 
 )
 
-#strategy.plot_cluster()
+
+
+
+# TRY TO GENERATE CLUSTER ANALYSIS PLOT
+strategy.plot_cluster()
 
 
 '''
