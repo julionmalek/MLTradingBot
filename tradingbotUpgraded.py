@@ -20,14 +20,18 @@ import sys
 import logging
 import numpy as np
 from datetime import datetime
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import pandas as pd
 from zoneinfo import ZoneInfo
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 import joblib
 import plotly.graph_objects as go
+from sklearn.decomposition import PCA
+from hmmlearn import hmm
+import streamlit as st
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
 
 # Utility Libraries
 from timedelta import Timedelta
@@ -371,8 +375,21 @@ class AdvancedMLTrader(Strategy):
 
 
     # Clustering
-    def cluster_analysis(self):
-        # Set date range (same as backtest). Will need to pull this from a parameters file or something, instead of hard-coding.
+    def cluster_analysis(self, n_components=3, n_regimes=3, rolling_window=90, return_combined=False):
+        """
+        Run PCA, HMM clustering, and return regime information with adjustable parameters.
+        
+        Parameters:
+            n_components (int): Number of principal components for PCA.
+            n_regimes (int): Number of regimes (HMM states).
+            rolling_window (int): Size of rolling window for daily returns and features.
+            return_combined (bool): Whether to return both combined and averaged features.
+
+        Returns:
+            averaged_features (pd.DataFrame): DataFrame with averaged technical indicators and regimes.
+            combined (pd.DataFrame): Combined stock data (individual stock returns).
+        """
+        # Set date range (same as backtest)
         start = datetime(2022, 1, 1, tzinfo=ZoneInfo("America/New_York"))
         end = datetime(2023, 12, 31, tzinfo=ZoneInfo("America/New_York"))
         length = (end - start).days
@@ -380,43 +397,20 @@ class AdvancedMLTrader(Strategy):
         stock_symbols = ["SPY", "AAPL"] #, "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PLTR", "ARKK", "SQ"]
 
         # Instantiate the data source
-        print("[IMPORTING DATA]")
-        data_source = YahooDataBacktesting(datetime_start=end, datetime_end=start) # I think that YahooDataBacktesting is backwards-looking, i.e. "starts" its dataset at the last available date.
+        data_source = YahooDataBacktesting(datetime_start=end, datetime_end=start)
         data = data_source.get_bars(assets=stock_symbols,
                                     length=length,
-                                    timestep="day"
-                                    )
-        print("[DATA IMPORTED]")
+                                    timestep="day")
         
         stock_dfs = []
 
+        # Iterate through stock symbols and create data for each symbol
         for key, df_raw in data.items():
-            # Convert to DataFrame
-            print(f"[PREPPING DATA FOR SYMBOL {key}]")
-
             df_raw = data[key]
-            df = df_raw.df
-            #print(df.head())
-
-            # Add symbol info in case you need it
-            df['symbol'] = str(key)
-
-            # Separate dataframe for each symbol
-            df.columns = df.columns.str.lower()
-
-            # Ensure datetime index, filter by the start and end date
-            df = df[(df.index >= start) & (df.index <= end)].copy()
-            print(f'[INPUT - START OF DATA] {start}')
-            print(f'[INPUT - END OF DATA] {end}')
-            print(f"[ACTUAL DATA RANGE FOR {key}]: {df.index.min()} to {df.index.max()}")
-
-            print(f"[PREPPED DATA FOR SYMBOL {key}]")
-
-            ############################################################################################################################################################################
-
-            #print("##########################")
-            
-            print(f"[CALCULATING TECHNICAL INDICATORS FOR SYMBOL {key}]")
+            df = df_raw.df                                          # Convert to DataFrame
+            df['symbol'] = str(key)                                 # Add symbol info in case you need it
+            df.columns = df.columns.str.lower()                     # Separate dataframe for each symbol
+            df = df[(df.index >= start) & (df.index <= end)].copy() # Ensure datetime index, filter by the start and end date
 
             # Calculate technical indicators. Note that we can add more.
             df['daily_return'] = df['close'].pct_change() # Daily return
@@ -427,88 +421,210 @@ class AdvancedMLTrader(Strategy):
             df['BB_upper'], df['BB_middle'], df['BB_lower'] = ta.BBANDS(df['close'], timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
             df['boll_width'] = df['BB_upper'] - df['BB_lower'] # Envelops price with upper/lower bands based on standard deviation. Price touching the band signals volatility breakout/mean reversion.
 
-            # Keep only features + align by date
+            # Keep only the necessary features
             df = df[['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']]
-            
-            print(f"[TECHNICAL INDICATORS CALCULATED FOR SYMBOL {key}]")
-
-            #print(df)
-            # Add to full dataset
             stock_dfs.append(df)
 
-        # Merge all stock features by date, drop missing values
+        # Merge all stock features by date and drop missing values
         combined = pd.concat(stock_dfs, axis=1, keys=stock_symbols)
-        combined = combined.dropna()
-        print(combined.head())
-        print(f'[DATAFRAMES COMBINED FOR {stock_symbols}]')
+        combined = combined.dropna()  # Drop rows with NaN values
 
-        # Take average for each feature type
-        feature_types = ['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']
+        # Flatten multi-index columns (e.g., ('AAPL', 'MACD') → 'AAPL_MACD')
+        combined.columns = [f"{symbol}_{feat}" for symbol, feat in combined.columns]
+
+        # Apply rolling window (for smoothing, if necessary)
         averaged_features = pd.DataFrame(index=combined.index)
+        feature_types = ['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']
+        for ft in feature_types:
+            cols = [col for col in combined.columns if ft in col]
+            averaged_features[ft] = combined[cols].mean(axis=1)
 
-        for feature in feature_types:
-            cols = [col for col in combined.columns if feature in col]
-            averaged_features[feature] = combined[cols].mean(axis=1)
+        # Apply rolling window to features
+        averaged_features['daily_return_rolling'] = averaged_features['daily_return'].rolling(window=rolling_window).mean()
 
-        # Normalize features and cluster
+        # Check for NaNs before applying PCA and drop them if found
+        if averaged_features.isnull().sum().sum() > 0:
+            print("Warning: NaNs detected in averaged_features, dropping rows with NaNs.")
+            averaged_features = averaged_features.dropna()
+
+        # Normalize the features so they have mean 0 and standard deviation 1, so that metrics are scale independent
         scaler = StandardScaler().fit(averaged_features)
         X_scaled = scaler.transform(averaged_features)
 
-        kmeans = KMeans(n_clusters=3, random_state=42)
-        regimes = kmeans.fit_predict(X_scaled)
+        # Apply PCA with the specified number of components. Reduces the feature space to a few key dimensions that capture the most variation in the data.
+        # Finds new axes (principal components) that are linear combinations of your original features, ranked by how much variance they explain.
+        pca = PCA(n_components=n_components)
+        X_pca = pca.fit_transform(X_scaled)
 
-        # Add regimes back to the frame
-        averaged_features['regime'] = regimes
+        # Apply HMM clustering with the specified number of regimes. Learns a set of hidden “regimes” that the system switches between over time, assuming that observations are Gaussian.
+        # Uses the Expectation-Maximization algorithm to fit state transition probabilities and emission distributions, capturing how regimes evolve and produce the observed PCA features.
+        model = hmm.GaussianHMM(n_components=n_regimes, covariance_type="full", random_state=42)
+        model.fit(X_pca)  # Fit the model to the data
 
-        # Save models and regime labels
+        # Now use predict() to get the hidden states (regimes). Assign each timestamp to one of these regimes. Decoding hidden sequence, assigning each time step in your dataset to one of those inferred regimes.
+        hidden_states = model.predict(X_pca)
+
+        # Add the regimes to the averaged features DataFrame
+        averaged_features['regime'] = hidden_states
+
+        # Save models and results
         joblib.dump(scaler, 'regime_scaler.pkl')
-        joblib.dump(kmeans, 'regime_model.pkl')
-        averaged_features.to_csv("portfolio_clustered_regimes.csv")
+        joblib.dump(pca, 'regime_pca.pkl')
+        joblib.dump(model, 'regime_hmm.pkl')
+        averaged_features.to_csv("portfolio_pca_hmm_regimes.csv")
 
-        return averaged_features
+        # Return either averaged features only or both averaged and combined data
+        if return_combined:
+            return averaged_features, combined, pca, X_pca
+        else:
+            return averaged_features, pca, X_pca
+
 
     def plot_cluster(self):
         """
-        Plots average daily return with shaded background regimes in an interactive browser window.
+        Interactive Streamlit dashboard for regime analysis.
+        Includes dynamic sliders for PCA components, regime count, and rolling window size.
+        Also adds visualizations for PCA (2D/3D) and PCA component loadings.
         """
-        # Ensure datetime index
-        averaged_features = self.cluster_analysis()
-        averaged_features.index = pd.to_datetime(averaged_features.index)
+        st.set_page_config(layout="wide")
 
-        fig = go.Figure()
+        st.title("Regime Detection Dashboard")
 
-        # Plot average return
-        fig.add_trace(go.Scatter(
-            x=averaged_features.index,
-            y=averaged_features['daily_return'],
-            mode='lines',
-            name='Avg Daily Return',
-            line=dict(color='black')
-        ))
+        # Sidebar controls
+        st.sidebar.header("Model Parameters")
+        n_components = st.sidebar.slider("Number of PCA Components", 1, 10, 3)
+        n_regimes = st.sidebar.slider("Number of Regimes (HMM States)", 2, 6, 3)
+        rolling_window = st.sidebar.slider("Rolling Window (Days)", 30, 180, 90)
 
-        # Add shaded regime bands
-        for regime in averaged_features['regime'].unique():
-            mask = averaged_features['regime'] == regime
-            regime_df = averaged_features[mask]
-            fig.add_vrect(
-                x0=regime_df.index.min(),
-                x1=regime_df.index.max(),
-                fillcolor=f"rgba({regime * 50 % 255}, {regime * 100 % 255}, {regime * 150 % 255}, 0.2)",
-                layer="below",
-                line_width=0,
-                annotation_text=f"Regime {regime}",
-                annotation_position="top left"
-            )
-
-        fig.update_layout(
-            title="Average Daily Return with Regime Overlay",
-            xaxis_title="Date",
-            yaxis_title="Average Return",
-            template="plotly_white"
+        # Load and rerun the clustering logic with current parameters
+        averaged_features, combined, pca_model, X_pca = self.cluster_analysis(
+            n_components=n_components,
+            n_regimes=n_regimes,
+            rolling_window=rolling_window,
+            return_combined=True
         )
 
-        # Save and open in browser
-        fig.write_html("regime_plot.html", auto_open=True)
+        tab1, tab2 = st.tabs(["📈 Model Fit Evaluation", "🔮 Model Prediction"])
+
+        # --- TAB 1: Model Fit Evaluation ---
+        with tab1:
+            st.subheader("Returns and Regimes")
+
+            # Plot average return
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=averaged_features.index,
+                y=averaged_features['daily_return'],
+                mode='lines',
+                name='Avg Daily Return',
+                line=dict(color='black')
+            ))
+
+            # Plot each individual stock return
+            return_cols = [col for col in combined.columns if 'daily_return' in col]
+            for col in return_cols:
+                fig.add_trace(go.Scatter(
+                    x=combined.index,
+                    y=combined[col],
+                    mode='lines',
+                    name=col,
+                    line=dict(width=0.7),
+                    opacity=0.4
+                ))
+
+            # Add shaded regimes
+            for regime in np.unique(averaged_features['regime']):
+                mask = averaged_features['regime'] == regime
+                regime_df = averaged_features[mask]
+                fig.add_vrect(
+                    x0=regime_df.index.min(),
+                    x1=regime_df.index.max(),
+                    fillcolor=f"rgba({regime * 50 % 255}, {regime * 100 % 255}, {regime * 150 % 255}, 0.1)",
+                    layer="below",
+                    line_width=0,
+                    annotation_text=f"Regime {regime}",
+                    annotation_position="top left"
+                )
+
+            fig.update_layout(
+                title="Returns with Regime Overlay",
+                xaxis_title="Date",
+                yaxis_title="Return",
+                template="plotly_white"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- PCA Component Loadings Bar Graph ---
+            st.subheader("PCA Component Loadings")
+            try:
+                num_features = pca_model.components_.shape[1]
+                feature_names = combined.iloc[:, :num_features].columns
+                components_df = pd.DataFrame(
+                    pca_model.components_,
+                    columns=feature_names,
+                    index=[f"PC{i+1}" for i in range(pca_model.n_components_)]
+                )
+                st.dataframe(components_df)
+
+                # Plot explained variance as bar chart
+                explained_variance = pca_model.explained_variance_ratio_
+                fig_variance = plt.figure(figsize=(8, 6))
+                plt.bar(range(1, len(explained_variance) + 1), explained_variance, alpha=0.7)
+                plt.title("Explained Variance by PCA Components")
+                plt.xlabel("Principal Components")
+                plt.ylabel("Explained Variance Ratio")
+                plt.xticks(range(1, len(explained_variance) + 1))
+                st.pyplot(fig_variance)
+
+            except Exception as e:
+                st.error(f"Error displaying PCA components: {e}")
+
+            # --- PCA 2D Visualization ---
+            st.subheader("PCA 2D Visualization")
+            pca_2d = PCA(n_components=2)
+            pca_2d_data = pca_2d.fit_transform(averaged_features.drop(columns=['regime']))
+
+            # Ensure the number of rows matches
+            if len(averaged_features) != len(pca_2d_data):
+                st.error("Mismatch between the number of rows in PCA data and regime data.")
+                return
+
+            # Create 2D scatter plot with regime colors
+            plt.figure(figsize=(10, 6))
+            scatter = plt.scatter(pca_2d_data[:, 0], pca_2d_data[:, 1], c=averaged_features['regime'], cmap="viridis", s=100, alpha=0.7)
+            plt.title("2D PCA Projection with Regimes")
+            plt.xlabel("PCA Component 1")
+            plt.ylabel("PCA Component 2")
+            plt.colorbar(label="Regimes")
+            st.pyplot(plt.gcf())
+
+            # --- PCA 3D Visualization ---
+            st.subheader("PCA 3D Visualization")
+            pca_3d = PCA(n_components=3)
+            pca_3d_data = pca_3d.fit_transform(averaged_features.drop(columns=['regime']))
+
+            # Ensure the number of rows matches
+            if len(averaged_features) != len(pca_3d_data):
+                st.error("Mismatch between the number of rows in PCA data and regime data.")
+                return
+
+            fig_3d = plt.figure(figsize=(10, 8))
+            ax = fig_3d.add_subplot(111, projection='3d')
+            scatter_3d = ax.scatter(pca_3d_data[:, 0], pca_3d_data[:, 1], pca_3d_data[:, 2], c=averaged_features['regime'], cmap="viridis", s=100, alpha=0.7)
+            ax.set_title("3D PCA Projection with Regimes")
+            ax.set_xlabel("PCA Component 1")
+            ax.set_ylabel("PCA Component 2")
+            ax.set_zlabel("PCA Component 3")
+            fig_3d.colorbar(scatter_3d, ax=ax, label="Regimes")
+            st.pyplot(fig_3d)
+
+        # --- TAB 2: Model Prediction Placeholder ---
+        with tab2:
+            st.subheader("Model Prediction")
+            st.write("Coming soon... (rolling forecasting, reinforcement learning, etc.)")
+
 
 
 
