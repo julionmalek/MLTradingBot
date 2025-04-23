@@ -1,0 +1,12 @@
+yfinance
+pandas
+numpy
+TA-Lib
+scikit-learn
+pinecone
+python-dotenv
+pandas-datareader
+transformers
+torch
+newsapi-python
+streamlit
