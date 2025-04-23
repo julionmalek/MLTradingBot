@@ -24,14 +24,22 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
 from zoneinfo import ZoneInfo
-
-
-
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+import joblib
+import plotly.graph_objects as go
 
 # Utility Libraries
 from timedelta import Timedelta
 import talib as ta
 from finbert_utils import estimate_sentiment
+
+# Lumibot / Alpaca
+from lumibot.brokers import Alpaca
+from lumibot.backtesting import YahooDataBacktesting
+from lumibot.strategies.strategy import Strategy
+from lumibot.traders import Trader
+from alpaca_trade_api import REST
 
 # --- Logging Setup (Console + standard format) ---
 logging.basicConfig(
@@ -55,13 +63,6 @@ print("ROOT LOGGER LEVEL:", root_lvl)        # e.g. 10 == DEBUG, 20 == INFO, ...
 print("LUMIBOT LOGGER LEVEL:", lumibot_lvl)
 print("ALPACA LOGGER LEVEL:", alpaca_lvl)
 print("ASYNCIO LOGGER LEVEL:", asyncio_lvl)
-
-# Lumibot / Alpaca
-from lumibot.brokers import Alpaca
-from lumibot.backtesting import YahooDataBacktesting
-from lumibot.strategies.strategy import Strategy
-from lumibot.traders import Trader
-from alpaca_trade_api import REST
 
 # --- Alpaca Credentials ---
 # Ideally, load these from environment variables or a .env file
@@ -372,30 +373,30 @@ class AdvancedMLTrader(Strategy):
     # Clustering
     def cluster_analysis(self):
         # Set date range (same as backtest). Will need to pull this from a parameters file or something, instead of hard-coding.
-        start = datetime(2023, 11, 1, 0, 0, 0, tzinfo=ZoneInfo("America/New_York"))
-        end = datetime(2023, 12, 31, 0, 0, 0, tzinfo=ZoneInfo("America/New_York"))
-
-        # Calculate length in days
+        start = datetime(2022, 1, 1, tzinfo=ZoneInfo("America/New_York"))
+        end = datetime(2023, 12, 31, tzinfo=ZoneInfo("America/New_York"))
         length = (end - start).days
 
-        stock_symbols = ["SPY"] #, "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PLTR", "ARKK", "SQ"]
+        stock_symbols = ["SPY", "AAPL"] #, "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "PLTR", "ARKK", "SQ"]
 
         # Instantiate the data source
-        data_source = YahooDataBacktesting(start, end)
+        print("[IMPORTING DATA]")
+        data_source = YahooDataBacktesting(datetime_start=end, datetime_end=start) # I think that YahooDataBacktesting is backwards-looking, i.e. "starts" its dataset at the last available date.
         data = data_source.get_bars(assets=stock_symbols,
                                     length=length,
-                                    timestep="day",
+                                    timestep="day"
                                     )
         print("[DATA IMPORTED]")
-
+        
         stock_dfs = []
 
         for key, df_raw in data.items():
             # Convert to DataFrame
+            print(f"[PREPPING DATA FOR SYMBOL {key}]")
+
             df_raw = data[key]
-            df = df_raw.df  # Convert Bars object to pandas DataFrame
-            print(df.head())
-            print(df.columns)
+            df = df_raw.df
+            #print(df.head())
 
             # Add symbol info in case you need it
             df['symbol'] = str(key)
@@ -404,26 +405,18 @@ class AdvancedMLTrader(Strategy):
             df.columns = df.columns.str.lower()
 
             # Ensure datetime index, filter by the start and end date
+            df = df[(df.index >= start) & (df.index <= end)].copy()
+            print(f'[INPUT - START OF DATA] {start}')
+            print(f'[INPUT - END OF DATA] {end}')
+            print(f"[ACTUAL DATA RANGE FOR {key}]: {df.index.min()} to {df.index.max()}")
 
-            print(f"Type of index: {type(df.index)}")
-            print(f"Index sample values: {df.index[:5]}")  # Check the first 5 values
+            print(f"[PREPPED DATA FOR SYMBOL {key}]")
 
             ############################################################################################################################################################################
-            #DATE FILTERING DOESNT WORK
-            data_min, data_max = df.index.min(), df.index.max()
-            start = max(start, data_min)  # Set start to max of requested and available start
-            end = min(end, data_max)      # Set end to min of requested and available end
 
-            print(f"Data range: {df.index.min()} to {df.index.max()}")
-            print(f"Filtering between {start} and {end}")
-
-
-            df.index = pd.to_datetime(df.index)
-            df = df[(df.index >= start) & (df.index <= end)]
-            print(df.head())
-            ############################################################################################################################################################################
-
-            print(f"[DATA PREPPED FOR SYMBOL {key}]")
+            #print("##########################")
+            
+            print(f"[CALCULATING TECHNICAL INDICATORS FOR SYMBOL {key}]")
 
             # Calculate technical indicators. Note that we can add more.
             df['daily_return'] = df['close'].pct_change() # Daily return
@@ -439,7 +432,7 @@ class AdvancedMLTrader(Strategy):
             
             print(f"[TECHNICAL INDICATORS CALCULATED FOR SYMBOL {key}]")
 
-            print(df)
+            #print(df)
             # Add to full dataset
             stock_dfs.append(df)
 
@@ -447,6 +440,7 @@ class AdvancedMLTrader(Strategy):
         combined = pd.concat(stock_dfs, axis=1, keys=stock_symbols)
         combined = combined.dropna()
         print(combined.head())
+        print(f'[DATAFRAMES COMBINED FOR {stock_symbols}]')
 
         # Take average for each feature type
         feature_types = ['daily_return', 'volatility_5d', 'RSI', 'MACD', 'ADX', 'boll_width']
@@ -475,55 +469,47 @@ class AdvancedMLTrader(Strategy):
 
     def plot_cluster(self):
         """
-        Plots average daily return with shaded background regimes.
-        Assumes 'averaged_features' has columns: 'daily_return' and 'regime',
-        and uses the index as datetime.
+        Plots average daily return with shaded background regimes in an interactive browser window.
         """
         # Ensure datetime index
         averaged_features = self.cluster_analysis()
         averaged_features.index = pd.to_datetime(averaged_features.index)
 
-        # Setup plot
-        fig, ax = plt.subplots(figsize=(14, 6))
+        fig = go.Figure()
 
         # Plot average return
-        ax.plot(
-            averaged_features.index,
-            averaged_features['daily_return'],
-            label="Avg Daily Return",
-            color='black',
-            linewidth=1
-        )
+        fig.add_trace(go.Scatter(
+            x=averaged_features.index,
+            y=averaged_features['daily_return'],
+            mode='lines',
+            name='Avg Daily Return',
+            line=dict(color='black')
+        ))
 
-        # Define regime colors
-        unique_regimes = averaged_features['regime'].unique()
-        colors = ['#e6f7ff', '#fff2e6', '#e6ffe6', '#ffe6f0', '#f2e6ff']  # Extendable
-        y_min = averaged_features['daily_return'].min()
-        y_max = averaged_features['daily_return'].max()
-
-        # Shade by regime
-        for regime in unique_regimes:
+        # Add shaded regime bands
+        for regime in averaged_features['regime'].unique():
             mask = averaged_features['regime'] == regime
-            ax.fill_between(
-                averaged_features.index,
-                y_min,
-                y_max,
-                where=mask,
-                color=colors[regime % len(colors)],
-                alpha=0.3,
-                label=f"Regime {regime}"
+            regime_df = averaged_features[mask]
+            fig.add_vrect(
+                x0=regime_df.index.min(),
+                x1=regime_df.index.max(),
+                fillcolor=f"rgba({regime * 50 % 255}, {regime * 100 % 255}, {regime * 150 % 255}, 0.2)",
+                layer="below",
+                line_width=0,
+                annotation_text=f"Regime {regime}",
+                annotation_position="top left"
             )
 
-        # Format plot
-        ax.set_title("Average Daily Return with Regime Overlay")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Average Return")
-        ax.legend()
-        ax.grid(True)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        fig.autofmt_xdate()
-        plt.tight_layout()
-        plt.show()
+        fig.update_layout(
+            title="Average Daily Return with Regime Overlay",
+            xaxis_title="Date",
+            yaxis_title="Average Return",
+            template="plotly_white"
+        )
+
+        # Save and open in browser
+        fig.write_html("regime_plot.html", auto_open=True)
+
 
 
     # -----------------------------------------
