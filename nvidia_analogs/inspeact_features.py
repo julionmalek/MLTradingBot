@@ -2,7 +2,7 @@
 import pandas as pd
 
 # 1) Load the pickle
-df = pd.read_pickle("data/nvidia_features.pkl")
+df = pd.read_parquet("data/nvidia_features.parquet")
 
 # 2) List out the macro & sentiment columns
 macro_cols = ['CPI','UNRATE','FEDFUNDS']#,'PCEPI','M2SL','GS10','VIXCLS']

@@ -16,6 +16,7 @@ from visualize_analogs import (
 )
 from datetime import date as dt_date, timedelta
 
+
 st.title("NVDA Analog Explorer")
 
 # --- Helper to build today's feature vector ----------------
@@ -66,7 +67,7 @@ def build_today_vector(ticker="NVDA", lookback_days=365):
 
 
 # --- Load historical features --------------------------------
-feat_df = pd.read_pickle("data/nvidia_features.pkl")
+feat_df = pd.read_parquet("data/nvidia_features.parquet")
 feat_df["date"] = pd.to_datetime(feat_df["date"]).dt.normalize()
 hist_dates = feat_df["date"].dt.date
 min_date, max_date = hist_dates.min(), hist_dates.max()

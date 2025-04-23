@@ -3,7 +3,7 @@ from pinecone import Pinecone, ServerlessSpec
 from config import PN_API_KEY, PN_ENV, INDEX_NAME
 
 # load features and infer dim
-df = pd.read_pickle("data/nvidia_features.pkl")
+df = pd.read_parquet("data/nvidia_features.parquet")
 dim = df.drop(columns=["date"]).shape[1]
 
 # init client

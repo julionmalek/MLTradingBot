@@ -52,6 +52,6 @@ def compute_features(price_df: pd.DataFrame) -> pd.DataFrame:
 
 if __name__ == "__main__":
     prices = pd.read_csv("data/nvidia_prices.csv", parse_dates=['date'])
-    feat   = compute_features(prices)
-    feat.to_pickle("data/nvidia_features.pkl")
-    print("[compute_features] saved data/nvidia_features.pkl")
+    feat = compute_features(prices)
+    feat.to_parquet("data/nvidia_features.parquet", index=False)
+    print("[compute_features] Saved data/nvidia_features.parquet")
