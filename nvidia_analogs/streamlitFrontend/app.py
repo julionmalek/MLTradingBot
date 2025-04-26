@@ -6,10 +6,10 @@ import talib as ta
 
 from pinecone import Pinecone
 from config import PN_API_KEY, PN_ENV, INDEX_NAME
-from fetch_macro import fetch_macro
-from fetch_sentiment import build_sentiment_features
-from compute_forward_returns import compute_forward_returns
-from visualize_analogs import (
+from DataServices.fetch_macro import fetch_macro
+from DataServices.fetch_sentiment import build_sentiment_features
+from nvidia_analogs.streamlitFrontend.compute_forward_returns import compute_forward_returns
+from nvidia_analogs.streamlitFrontend.visualize_analogs import (
     plot_similarity,
     plot_forward_returns,
     plot_feature_profiles

@@ -1,9 +1,9 @@
 from pinecone import Pinecone, ServerlessSpec
-from config import PN_API_KEY, PN_ENV, INDEX_NAME
+from nvidia_analogs.config import PN_API_KEY, PN_ENV, INDEX_NAME
 import pandas as pd
 
 # infer dimension from your latest feature file
-df = pd.read_parquet("data/nvidia_features.parquet")
+df = pd.read_parquet("../data/nvidia_features.parquet")
 dim = df.drop(columns=["date"]).shape[1]
 
 pc = Pinecone(api_key=PN_API_KEY, environment=PN_ENV)
