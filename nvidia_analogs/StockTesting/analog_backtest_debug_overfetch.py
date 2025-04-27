@@ -13,15 +13,20 @@ For each ticker in TICKERS:
 import pandas as pd
 from pinecone import Pinecone
 from datetime import timedelta, datetime
-from nvidia_analogs.config import PN_API_KEY, PN_ENV, INDEX_NAME
+from nvidia_analogs.config import PN_API_KEY, PN_ENV, INDEX_NAME2
 from nvidia_analogs.streamlitFrontend.compute_forward_returns import compute_forward_returns
 from pathlib import Path
+
+PN_API_KEY = "pcsk_36gTWZ_M3B4d5VeAZmn1Gt2jymGyX7uQAacupuiDD5EtnKmfx6AkP9UgGNxsU6zLXNPNco"
+PN_ENV    = "us-east1"  # e.g. "us-west1-gcp", "us-east1-gcp"
+
 
 SCRIPT_DIR  = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent  # e.g. MLTradingBot/nvidia_analogs
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-TICKERS      = ["NVDA","AAPL","MSFT","TSLA","GOOGL","AMZN"]
+#TICKERS      = ["NVDA","AAPL","MSFT","TSLA","GOOGL","AMZN"]
+TICKERS      = ["NVDA"]
 TOP_K        = 10
 HORIZON_DAYS = 5
 PROFIT_THRESH= 0.03  # 3% analog threshold
@@ -36,14 +41,14 @@ if not PRICE_DIR.exists(): PRICE_DIR = DATA_DIR
 
 # ─── Pinecone setup ───────────────────────────────────────────────────────────
 pc    = Pinecone(api_key=PN_API_KEY, environment=PN_ENV)
-index = pc.Index(INDEX_NAME)
+index = pc.Index(INDEX_NAME2)
 
 # ─── Backtest per‐ticker ───────────────────────────────────────────────────────
 for ticker in TICKERS:
     print(f"\n=== Backtesting {ticker} ===")
 
     # 1) load features & prices
-    feat_path  = FEAT_DIR  / f"{ticker}_features.parquet"
+    feat_path  = FEAT_DIR  / f"{ticker}_features_with_sentiment.parquet"
     price_path = PRICE_DIR / f"{ticker}_prices.csv"
 
     if not feat_path.exists() or not price_path.exists():
@@ -124,7 +129,7 @@ for ticker in TICKERS:
         continue
 
     results = pd.DataFrame(records).set_index("date").sort_index()
-    out_csv = OUT_DIR / f"{ticker}_analog_backtest.csv"
+    out_csv = OUT_DIR / f"{ticker}_analog_backtest2.csv"
     results.to_csv(out_csv)
     print(f" ✔️  Wrote {out_csv}")
     print("    • Corr(analog,actual):", results["avg_analog_ret"].corr(results["actual_ret"]))

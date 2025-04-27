@@ -11,15 +11,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent  # e.g. MLTradingBot/nvidia_analogs
 sys.path.insert(0, str(PROJECT_ROOT.parent))  # MLTradingBot
 
-from nvidia_analogs.config import PN_API_KEY, PN_ENV, INDEX_NAME
+from nvidia_analogs.config import PN_API_KEY, PN_ENV, INDEX_NAME2
+print(f"PN_API_KEY={PN_API_KEY}")
+print(f"PN_ENV={PN_ENV}")
 
 # ─── where our feature parquet files live ─────────────────────────────────────
 DATA_DIR = PROJECT_ROOT / "data"
+FPARQUETS_DIR = DATA_DIR / "featuresParquets"
 
 TICKERS = ["NVDA","AAPL","MSFT","TSLA","GOOGL","AMZN"]
 
 # ─── infer vector dimension from the first ticker ─────────────────────────────
-sample_path = DATA_DIR / f"{TICKERS[0]}_features.parquet"
+sample_path = FPARQUETS_DIR / f"{TICKERS[0]}_features_with_sentiment.parquet"
 if not sample_path.exists():
     raise FileNotFoundError(f"Expected feature file not found: {sample_path}")
 sample = pd.read_parquet(sample_path)
@@ -28,19 +31,19 @@ dim = sample.drop(columns=["date"]).shape[1]
 # ─── initialize Pinecone ──────────────────────────────────────────────────────
 pc = Pinecone(api_key=PN_API_KEY, environment=PN_ENV)
 
-if INDEX_NAME not in pc.list_indexes().names():
+if INDEX_NAME2 not in pc.list_indexes().names():
     pc.create_index(
-        name=INDEX_NAME,
+        name=INDEX_NAME2,
         dimension=dim,
         metric="cosine",
         spec=ServerlessSpec(cloud="aws", region=PN_ENV)
     )
 
-index = pc.Index(INDEX_NAME)
+index = pc.Index(INDEX_NAME2)
 
 # ─── upsert each ticker’s features into its own namespace ─────────────────────
 for sym in TICKERS:
-    feat_path = DATA_DIR / f"{sym}_features.parquet"
+    feat_path = FPARQUETS_DIR / f"{sym}_features_with_sentiment.parquet"
     if not feat_path.exists():
         print(f"⚠️  Skipping {sym}, feature file not found at {feat_path}")
         continue

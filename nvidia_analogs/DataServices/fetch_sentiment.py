@@ -1,67 +1,44 @@
+# test_sentiment_from_news.py
+
 import os
-import pandas as pd
-import requests
-from dotenv import load_dotenv
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
-from datetime import timedelta
+from datetime import datetime
+from alpaca_trade_api import REST
+from timedelta import Timedelta
+from nvidia_analogs.DataServices.sentiment_utils import estimate_sentiment  # ← from the module we made
 
-load_dotenv()
+# ─── Alpaca API Setup ───────────────────────────────────────────────
+API_KEY = os.getenv("ALPACA_API_KEY")
+API_SECRET = os.getenv("ALPACA_API_SECRET")
+BASE_URL = "https://paper-api.alpaca.markets"
 
-NEWS_API_KEY  = os.getenv("NEWS_API_KEY")
-NEWS_API_URL  = "https://newsapi.org/v2/everything"
-FINBERT_MODEL = os.getenv("FINBERT_MODEL", "ProsusAI/finbert")
+api = REST(base_url=BASE_URL, key_id=API_KEY, secret_key=API_SECRET)
 
-# one‑time init
-tokenizer = AutoTokenizer.from_pretrained(FINBERT_MODEL)
-model     = AutoModelForSequenceClassification.from_pretrained(FINBERT_MODEL)
-sentiment_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
+# ─── Functions ──────────────────────────────────────────────────────
+def get_dates():
+    today = datetime.now()
+    three_days_prior = today - Timedelta(days=3)
+    return today.strftime('%Y-%m-%d'), three_days_prior.strftime('%Y-%m-%d')
 
-def score_texts(texts: list[str]) -> float:
-    if not texts:
-        print("  [score_texts] no texts → 0.0")
-        return 0.0
+def get_sentiment(symbol="NVDA"):
+    today, three_days_prior = get_dates()
     try:
-        results = sentiment_pipeline(texts)
+        news_items = api.get_news(
+            symbol=symbol,
+            start=three_days_prior,
+            end=today
+        )
+        headlines = [n.__dict__["_raw"]["headline"] for n in news_items]
+        print(f"Fetched {len(headlines)} headlines for {symbol}")
+        
+        probability, sentiment = estimate_sentiment(headlines)
+        return probability, sentiment
+
     except Exception as e:
-        print(f"  [score_texts] pipeline error: {e}")
-        return 0.0
+        print(f"Error fetching news: {e}")
+        return 0.0, "neutral"
 
-    vals = []
-    for r in results:
-        lbl = r['label'].lower()
-        sc  = r['score']
-        vals.append(sc if 'positive' in lbl else -sc)
-    avg = sum(vals)/len(vals) if vals else 0.0
-    print(f"  [score_texts] {len(vals)} scores → avg {avg:.4f}")
-    return avg
-
-def build_sentiment_features(dates: list[pd.Timestamp]) -> pd.DataFrame:
-    recs = []
-    print(f"[fetch_sentiment] fetching for {len(dates)} dates")
-    for d in dates:
-        day = pd.to_datetime(d).normalize()
-        frm = day.strftime("%Y-%m-%d")
-        to  = (day + timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"[fetch_sentiment] {frm}…", end="")
-
-        params = {
-            'q':'NVIDIA OR NVDA',
-            'from':frm,'to':to,
-            'language':'en','pageSize':100,
-            'apiKey':NEWS_API_KEY
-        }
-        try:
-            r = requests.get(NEWS_API_URL, params=params, timeout=10)
-            arts = r.json().get('articles',[])
-            print(f" {len(arts)} articles", end="")
-        except Exception as e:
-            print(f" API error: {e}", end="")
-            arts = []
-
-        texts = [a.get('title','') + '. ' + a.get('description','') for a in arts]
-        score = score_texts(texts)
-        recs.append({'date':day,'news_sentiment':score})
-
-    df = pd.DataFrame(recs)
-    print(f"\n[fetch_sentiment] done → {len(df)} rows")
-    return df
+# ─── Main Execution ─────────────────────────────────────────────────
+if __name__ == "__main__":
+    symbol = "NVDA"  # You can change this to any stock symbol
+    probability, sentiment = get_sentiment(symbol)
+    print(f"Sentiment for {symbol}: {sentiment} ({probability:.2f})")

@@ -16,6 +16,7 @@ sys.path.insert(0, str(PROJECT_ROOT.parent))
 # ─── Data Directory ───────────────────────────────────────────────
 DATA_DIR = PROJECT_ROOT / "data"
 ANA_DIR = DATA_DIR / "AnalogFullBacktests"
+TRADING_FEE = 0.001  # 0.1% trading fee
 
 # ─── Logging ─────────────────────────────────────────────────────
 logging.basicConfig(stream=sys.stdout,
@@ -30,6 +31,7 @@ class MultiAnalogStrategy(Strategy):
 
     def initialize(self, **kwargs):
         self.symbols = kwargs.get("symbols", ["NVDA", "AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"])
+        #self.symbols = kwargs.get("symbols", ["NVDA"])
         self.signal_dir = kwargs.get("signal_dir", ANA_DIR)
         self.invest_frac = kwargs.get("invest_frac", 0.8)
         self.horizon_days = kwargs.get("horizon_days", 5)
@@ -104,7 +106,7 @@ class MultiAnalogStrategy(Strategy):
 
         for sym, score in candidates:
             weight = score / total_score
-            allocation = investable_cash * weight
+            allocation = investable_cash * weight * (1 - TRADING_FEE)  # Apply fee adjustment to buying power
             price = self.get_last_price(sym)
             if price and price > 0:
                 qty = int(allocation // price)
@@ -130,6 +132,7 @@ if __name__ == "__main__":
         benchmark="SPY",
         parameters={
             "symbols": ["NVDA", "AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"],
+            #"symbols": ["NVDA"],
             "signal_dir": DATA_DIR,
             "invest_frac": 0.8,
             "horizon_days": 5
@@ -139,6 +142,6 @@ if __name__ == "__main__":
 
     strat.backtest(
         YahooDataBacktesting,
-        datetime(2010, 4, 20),
+        datetime(2015, 4, 20),
         datetime(2025, 4, 23)
     )
