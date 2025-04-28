@@ -75,7 +75,12 @@ stock_symbols = ["SPY", "AAPL"] #, "MSFT", "GOOGL", "AMZN",  # stable performers
                  #"TSLA", "NVDA", "PLTR", "ARKK", "SQ"     # volatile picks]
 
 # Import data
-data_source = YahooDataBacktesting(datetime_start=end, datetime_end=start)
+raw_data = YahooDataBacktesting(datetime_start=end, datetime_end=start)
+
+# Clean data
+length = (end - start).days
+data_source = raw_data.get_bars(assets = stock_symbols, length = length, timestep = "day")
+
 
 # Define the strategy and its parameters
 strategy = AdvancedMLTrader(start = start,
