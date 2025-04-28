@@ -30,7 +30,7 @@ def run_dashboard(strategy, start, end):
 
         if use_optimized:
             # Use the best params from optimization
-            best_params = strategy.optimal_params(n_components_slider_range=(2, 2, 1),
+            best_params = strategy.optimal_cluster_params(n_components_slider_range=(2, 2, 1),
                                                   n_regimes_slider_range=(2, 2, 1),
                                                   rolling_window_slider_range=(30, 90, 30))
 
