@@ -45,7 +45,7 @@ def run_dashboard(strategy, start, end):
             weighting_options = {'time': True, 'volatility': True, 'portfolio': False}  # Default if sliders are used
 
         # Load and rerun the clustering logic with current parameters
-        averaged_features, combined, eig_vecs, eig_vals, X_pca = strategy.cluster_analysis(n_components = n_components,
+        averaged_features, eig_vecs, eig_vals, X_pca, combined = strategy.cluster_analysis(n_components = n_components,
                                                                                   n_regimes = n_regimes,
                                                                                   rolling_window = rolling_window,
                                                                                   return_combined = True,
