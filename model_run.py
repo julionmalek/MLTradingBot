@@ -53,6 +53,10 @@ if True:
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
     logging.getLogger('lumibot.data_sources.yahoo_data').setLevel(logging.WARNING)
     logging.getLogger('fsevents').setLevel(logging.WARNING)
+    logging.getLogger('websockets.client').setLevel(logging.WARNING)
+    logging.getLogger('PIL.PngImagePlugin').setLevel(logging.WARNING)
+    logging.getLogger('alpaca.trading.stream').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 
 # --- 3. ALPACA SETUP ---
@@ -74,6 +78,9 @@ end = datetime(2023, 12, 31, tzinfo=ZoneInfo("America/New_York"))
 stock_symbols = ["SPY", "AAPL"] #, "MSFT", "GOOGL", "AMZN",  # stable performers
                  #"TSLA", "NVDA", "PLTR", "ARKK", "SQ"     # volatile picks]
 
+# NEED TO ADD DEFAULT PORTFOLIO WEIGHT!!!
+
+
 # Import data
 raw_data = YahooDataBacktesting(datetime_start=end, datetime_end=start)
 
@@ -90,9 +97,28 @@ strategy = AdvancedMLTrader(start = start,
                             broker=broker,
                             benchmark="SPY",  # Explicitly setting benchmark
                             parameters={"symbols": stock_symbols,
-                                        "cash_at_risk": 1.0,  # default risk
-                                        "stable_allocation": 0.25},  # 25% into SPY},
+                                        "cash": 5000,
+                                        "risk aversion": 1.0}, # Start with 5000$
                             debug=True)  # Enable debug mode
 
-# --- 5. Launch the dashboard ---
+# --- 4. Train model ---
+# Generate features
+features, _, targets = strategy.generate_features(compute_garch=True, return_raw_targets = True)
+
+
+# Extract target variables
+returns, volatility = features['daily_return'], features['garch_vol']
+
+# Train model
+print(f"Number of observations: {len(features)}")
+
+strategy.predict_and_update(features = features.drop(columns = ['daily_return', 'garch_vol']),
+                                     targets = pd.concat([returns, volatility], axis=1))
+
+print(f"Trained on {len(strategy.predictions)} time points.")
+
+# --- 5. Run test on new data
+# NEED TO SEGMENT DATA INTO TRAINING AND TESTING DATASETS
+
+# --- 6. Launch the dashboard ---
 run_dashboard(strategy, start, end)
