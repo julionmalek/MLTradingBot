@@ -8,6 +8,9 @@ if True:
     import pandas as pd
     import plotly.graph_objects as go
     from sklearn.decomposition import PCA
+    from sklearn.metrics import mean_squared_error
+    from sklearn.metrics import r2_score
+    from sklearn.metrics import mean_absolute_error
     import streamlit as st
     import matplotlib.pyplot as plt
 
@@ -20,7 +23,7 @@ def run_dashboard(strategy, start, end):
         """
         st.set_page_config(layout="wide")
 
-        st.title("Regime Detection Dashboard")
+        st.title("Trading Bot Dashboard")
 
         # Sidebar controls
         st.sidebar.header("Model Parameters")
@@ -52,11 +55,11 @@ def run_dashboard(strategy, start, end):
                                                                                   weighting_options = weighting_options
                                                                                   )
 
-        tab1, tab2 = st.tabs(["Model Fit Evaluation", "Model Prediction"])
+        tab1, tab2, tab3 = st.tabs(["Regimes", "Model Training", "Model Testing"])
 
-        # --- TAB 1: Model Fit Evaluation ---
+        # --- TAB 1: Regimes ---
         with tab1:
-            st.subheader("Returns and Regimes")
+            st.subheader("Regimes")
 
             # Plot average return
             fig = go.Figure()
@@ -189,10 +192,55 @@ def run_dashboard(strategy, start, end):
             fig_3d.colorbar(scatter_3d, ax=ax, label="Regimes")
             st.pyplot(fig_3d)
 
-        # --- TAB 2: Model Prediction Placeholder ---
+        # --- TAB 2: Model Prediction ---
         with tab2:
             st.subheader("Model Prediction")
-            st.write("Coming soon... (rolling forecasting, reinforcement learning, etc.)")
+
+            # Ensure predictions and actuals are available
+            if hasattr(strategy, "predictions") and strategy.predictions and hasattr(strategy, "dates"):
+                pred_df = pd.DataFrame(strategy.predictions, columns=["predicted_return", "predicted_volatility"], index=strategy.dates)
+
+                # Align with actual data
+                actuals = averaged_features.loc[pred_df.index][["daily_return", "volatility_5d"]].copy()
+                actuals.rename(columns={"daily_return": "actual_return", "volatility_5d": "actual_volatility"}, inplace=True)
+
+                results_df = pd.concat([actuals, pred_df], axis=1)
+
+                # --- Plot 1: Actual vs Predicted Returns ---
+                st.markdown("### Actual vs Predicted Returns")
+                fig_ret = go.Figure()
+                fig_ret.add_trace(go.Scatter(x=results_df.index, y=results_df["actual_return"], mode="lines", name="Actual Return"))
+                fig_ret.add_trace(go.Scatter(x=results_df.index, y=results_df["predicted_return"], mode="lines", name="Predicted Return"))
+                fig_ret.update_layout(title="Returns Comparison", xaxis_title="Date", yaxis_title="Return")
+                st.plotly_chart(fig_ret, use_container_width=True)
+
+                # Return metrics
+                st.markdown("**Performance Metrics (Returns)**")
+                r2_ret = r2_score(results_df["actual_return"], results_df["predicted_return"])
+                mse_ret = mean_squared_error(results_df["actual_return"], results_df["predicted_return"])
+                mae_ret = mean_absolute_error(results_df["actual_return"], results_df["predicted_return"])
+                st.write(f"R-squared: {r2_ret:.4f}")
+                st.write(f"MSE: {mse_ret:.6f}")
+                st.write(f"MAE: {mae_ret:.6f}")
+
+                # --- Plot 2: Actual vs Predicted Volatility ---
+                st.markdown("### Actual vs Predicted Volatility")
+                fig_vol = go.Figure()
+                fig_vol.add_trace(go.Scatter(x=results_df.index, y=results_df["actual_volatility"], mode="lines", name="Actual Volatility"))
+                fig_vol.add_trace(go.Scatter(x=results_df.index, y=results_df["predicted_volatility"], mode="lines", name="Predicted Volatility"))
+                fig_vol.update_layout(title="Volatility Comparison", xaxis_title="Date", yaxis_title="Volatility")
+                st.plotly_chart(fig_vol, use_container_width=True)
+
+                # Volatility metrics
+                st.markdown("**Performance Metrics (Volatility)**")
+                r2_vol = r2_score(results_df["actual_volatility"], results_df["predicted_volatility"])
+                mse_vol = mean_squared_error(results_df["actual_volatility"], results_df["predicted_volatility"])
+                mae_vol = mean_absolute_error(results_df["actual_volatility"], results_df["predicted_volatility"])
+                st.write(f"R-squared: {r2_vol:.4f}")
+                st.write(f"MSE: {mse_vol:.6f}")
+                st.write(f"MAE: {mae_vol:.6f}")
+            else:
+                st.warning("No predictions available. Please run the training first.")
 
 
 
