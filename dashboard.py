@@ -15,7 +15,7 @@ if True:
     import matplotlib.pyplot as plt
 
 # --- 2. CREATE DASHBOARD ---
-def run_dashboard(strategy, start, end):
+def run_dashboard(strategy):
         """
         Interactive Streamlit dashboard for regime analysis.
         Includes dynamic sliders for PCA components, regime count, and rolling window size.
