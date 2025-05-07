@@ -78,9 +78,6 @@ end = datetime(2023, 12, 31, tzinfo=ZoneInfo("America/New_York"))
 stock_symbols = ["SPY", "AAPL"] #, "MSFT", "GOOGL", "AMZN",  # stable performers
                  #"TSLA", "NVDA", "PLTR", "ARKK", "SQ"     # volatile picks]
 
-# NEED TO ADD DEFAULT PORTFOLIO WEIGHT!!!
-
-
 # Import data
 raw_data = YahooDataBacktesting(datetime_start=end, datetime_end=start)
 
@@ -88,10 +85,17 @@ raw_data = YahooDataBacktesting(datetime_start=end, datetime_end=start)
 length = (end - start).days
 data_source = raw_data.get_bars(assets = stock_symbols, length = length, timestep = "day")
 
+# Import etc for clustering
+start1 = datetime(2021, 1, 1, tzinfo=ZoneInfo("America/New_York"))
+end1 = datetime(2022, 12, 31, tzinfo=ZoneInfo("America/New_York"))
+raw_data = YahooDataBacktesting(datetime_start=end1, datetime_end=start1)
+length1 = (end1 - start1).days
+cluster_training_data = raw_data.get_bars(assets = stock_symbols, length = length1, timestep = "day")
 
 # Define the strategy and its parameters
 strategy = AdvancedMLTrader(start = start,
                             end = end,
+                            cluster_training_data = cluster_training_data,
                             data_source = data_source,
                             name="enhanced_ml_trader",
                             broker=broker,
@@ -107,18 +111,15 @@ features, _, targets = strategy.generate_features(compute_garch=True, return_raw
 
 
 # Extract target variables
-returns, volatility = features['daily_return'], features['garch_vol']
+returns, volatility = targets['daily_return'], targets['volatility_5d']
 
 # Train model
 print(f"Number of observations: {len(features)}")
 
-strategy.predict_and_update(features = features.drop(columns = ['daily_return', 'garch_vol']),
+strategy.predict_and_update(features = features.drop(columns = ['daily_return', 'volatility_5d']),
                                      targets = pd.concat([returns, volatility], axis=1))
 
 print(f"Trained on {len(strategy.predictions)} time points.")
 
-# --- 5. Run test on new data
-# NEED TO SEGMENT DATA INTO TRAINING AND TESTING DATASETS
-
-# --- 6. Launch the dashboard ---
-run_dashboard(strategy, start, end)
+# --- 5. Launch the dashboard ---
+run_dashboard(strategy)
