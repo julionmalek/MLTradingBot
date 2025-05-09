@@ -60,7 +60,7 @@ def run_dashboard(strategy):
         # --- TAB 1: Regimes ---
         with tab1:
             st.subheader("Regimes")
-
+            '''
             # Plot average return
             fig = go.Figure()
 
@@ -112,6 +112,7 @@ def run_dashboard(strategy):
 
             # --- PCA Component Loadings Bar Graph ---
             st.subheader("PCA Component Loadings")
+            
             try:
 
                 print("averaged_features.shape[1]:", averaged_features.shape[1])
@@ -191,7 +192,8 @@ def run_dashboard(strategy):
             ax.set_zlabel("PCA Component 3")
             fig_3d.colorbar(scatter_3d, ax=ax, label="Regimes")
             st.pyplot(fig_3d)
-
+            '''
+        
         # --- TAB 2: Model Prediction ---
         with tab2:
             st.subheader("Model Prediction")
