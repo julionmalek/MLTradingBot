@@ -63,7 +63,6 @@ class AdvancedMLTrader:
         self.cash = parameters["cash"]
         self.holdings = {}  # Current stock holdings
         self.portfolio_weights = {}  # Current target weights
-        self.weight_history = {}  # Historical weights (optional)
         self.portfolio_returns = []  # Daily portfolio returns
         self.portfolio_values = []  # Daily total value of portfolio
         self.return_predictions = {}  # {date: {symbol: predicted_return}}
@@ -71,41 +70,61 @@ class AdvancedMLTrader:
         self.prediction_history = {}  # Keep full history
         self.sharpe_ratios = []  # Sharpe ratios over time
         self.risk_aversion = parameters.get("risk aversion", 1.0)
+        
+        self.initialize_portfolio()
 
     def initialize_portfolio(self):
         """
         Sets up initial portfolio weights (1/n per symbol) and computes initial holdings
         based on the latest available prices in self.data_source.
         """
-        symbols = self.stock_symbols
-        n = len(symbols)
-        equal_weight = 1 / n
-        self.portfolio_weights = {symbol: equal_weight for symbol in symbols}
+        # Calculate equal weight for each symbol
+        equal_weight = 1 / len(self.stock_symbols)  # Equal weight per symbol for initial allocation
 
-        for symbol in symbols:
-            # Get latest available price
+        # Initialize portfolio weights for the start date
+        self.portfolio_weights[self.start] = {symbol: equal_weight for symbol in self.stock_symbols}
+
+
+        # Now handle cash allocation and holdings for the start date
+        for symbol in self.stock_symbols:
             try:
+                # Retrieve the latest price for each symbol from the data source
                 price_data = self.data_source[symbol]
+                print(price_data)
+                
+                # Print out available dates for debugging
+                print(f"Available dates for {symbol}: {price_data.index}")
+                
+                # Check if the start date is available in the price data
                 if isinstance(price_data, pd.DataFrame):
-                    latest_price = price_data.iloc[-1]["close"]
+                    if self.start in price_data.index:
+                        latest_price = price_data.loc[self.start]["close"]
+                    else:
+                        print(f"Price data for {symbol} not available for {self.start}. Skipping.")
+                        continue
                 else:
-                    latest_price = price_data[-1].close  # fallback for list-like
+                    if self.start in price_data:
+                        latest_price = price_data[self.start].close
+                    else:
+                        print(f"Price data for {symbol} not available for {self.start}. Skipping.")
+                        continue
             except Exception as e:
-                print(f"Error retrieving price for {symbol}: {e}")
-                continue
+                print(f"Error retrieving price for {symbol} on {self.start}: {e}")
+                continue  # Skip if there is an error retrieving price
 
-            # Allocate cash based on equal weights
+            # Allocate cash to the symbol based on the equal weight
             allocated_cash = self.cash * equal_weight
-            quantity = allocated_cash // latest_price
+            quantity = allocated_cash // latest_price  # Determine the quantity to purchase
             self.holdings[symbol] = {
                 "quantity": quantity,
                 "price": latest_price,
                 "value": quantity * latest_price
             }
 
-        if self.debug:
-            print(f"Initialized portfolio weights: {self.portfolio_weights}")
-            print(f"Initial holdings: {self.holdings}")
+        # For debugging, print out portfolio weights and holdings for the start date
+        print(f"Portfolio Weights (starting from {self.start}): {self.portfolio_weights}")
+        print(f"Holdings: {self.holdings}")
+
 
     def generate_features(self, data = None, regime_labels = None, compute_garch = False, garch_vols = None, compute_daily_sharpe=False, daily_sharpes=None, rolling_window = 90, return_combined = False, return_raw_targets = False):
         """
@@ -122,7 +141,7 @@ class AdvancedMLTrader:
 
         # Calculate technical indicators
         for symbol, df_raw in data.items():
-            df = df_raw.df.copy()
+            df = df_raw.copy()
             df.columns = df.columns.str.lower()
 
             df['symbol'] = symbol
@@ -159,49 +178,66 @@ class AdvancedMLTrader:
             averaged_features['garch_vol'] = garch_vols
         elif compute_garch:
             returns = averaged_features['daily_return'].dropna()
-            garch_forecasts = pd.Series(index=returns.index, dtype=float)
+            # Initialize a container for GARCH forecasts
+            garch_forecasts = pd.Series(dtype=float)
 
             for i in range(1, len(returns)):  # start at 1 to avoid i-1 = -1
                 start_date = returns.index[0]
                 end_date = returns.index[i - 1]
                 forecast_date = returns.index[i]
 
-                garch_vol = self.forecast_garch_volatility_range(
+                #print(f"\nForecast loop {i}")
+                #print(f"Start date: {start_date}")
+                #print(f"End date: {end_date}")
+                #print(f"Forecast date: {forecast_date}")
+
+                garch_vol = self.forecast_garch_volatility(
                     returns=returns,
                     start=start_date,
                     end=end_date
                 )
 
-                print("GARCH volatility head:")
-                print(garch_vol.head())
-                print("Any NaNs in garch_vol?", garch_vol.isna().sum())
-                print("Length of garch_vol:", len(garch_vol))
-                print("Length of averaged_features:", len(averaged_features))
-
+                # Debug output
+                #print("GARCH forecast result:")
+                #print(f"Type: {type(garch_vol)}")
+                #print(f"Value: {garch_vol}")
+                
                 if garch_vol is not None:
-                    garch_forecasts.loc[forecast_date] = garch_vol
+                    # Directly assign the value into the averaged_features DataFrame
+                    averaged_features.loc[forecast_date, 'garch_vol'] = garch_vol
+                    #print(f"Assigned GARCH vol {garch_vol} to averaged_features at {forecast_date}")
+                else:
+                    print(f"GARCH forecast failed for forecast_date {forecast_date}; skipping assignment.")
 
-            # Align with averaged_features
-            garch_forecasts = garch_forecasts.reindex(averaged_features.index) # Realign index just in case, gets NaN if no forecast exists
-            averaged_features['garch_vol'] = garch_forecasts            
-        
+            # Optional: ensure the DataFrame index is sorted after assigning new rows
+            averaged_features = averaged_features.sort_index()
+
+            # Final debug checks
+            #print("\nPost-processing debug:")
+            #print("Any NaNs in averaged_features['garch_vol']?", averaged_features['garch_vol'].isna().sum())
+            #print("Length of averaged_features:", len(averaged_features))
+            #print("averaged_features sample with garch_vol:")
+            #print(averaged_features[['garch_vol']].tail(5))
+
+
          # Add daily Sharpe
         if daily_sharpes is not None:
             averaged_features['daily_sharpe'] = daily_sharpes
         elif compute_daily_sharpe:
             returns = averaged_features['daily_return'].dropna()
             daily_sharpe_series = pd.Series(index=returns.index, dtype=float)
-
-            for i in range(1, len(returns)):  # start at 1 to avoid i-1 = -1
-                start_date = returns.index[0]
-                end_date = returns.index[i - 1]
+            
+            min_window = 21
+            for i in range(min_window, len(returns)):  # ensure enough data for Sharpe
+                start_date = returns.index[i - min_window]
+                end_date = returns.index[i - 1]  # End of the window (previous day)
                 forecast_date = returns.index[i]
 
                 daily_sharpe = self.compute_sharpe_rolling(
                     returns=returns,
                     start=start_date,
                     end=end_date,
-                    window = 21
+                    window = min_window
                 )
 
                 # Print for debugging
@@ -258,12 +294,35 @@ class AdvancedMLTrader:
         dates = returns.loc[(returns.index >= start) & (returns.index <= end)].index
         weighted_returns = []
 
-        for date in dates:
-            # Ensure portfolio weights are available for the given date
-            if date not in self.portfolio_weights:
-                continue  # Skip if no portfolio weights available
+        print(f"Dates: {dates}")
+        print(f"Portfolio weights: {self.portfolio_weights}")
 
-            weights = self.portfolio_weights[date]
+        # Initialize previous weights (for fallback) or set equal weights
+        last_known_weights = None
+        equal_weight = 1 / len(self.stock_symbols)
+
+
+        for date in dates:
+            # Step 1: Try to get weights directly
+            if date in self.portfolio_weights:
+                weights = self.portfolio_weights[date]
+            else:
+                # Fallback: find latest available weight before this date
+                past_dates = [d for d in self.portfolio_weights if d < date]
+                if past_dates:
+                    most_recent = max(past_dates)
+                    weights = self.portfolio_weights[most_recent]
+                    print(f"Using fallback weights from {most_recent} for {date}")
+                else:
+                    weights = {symbol: equal_weight for symbol in self.stock_symbols}
+                    print(f"No prior weights found. Using equal weights for {date}")
+            
+            print(returns)
+
+
+
+
+
 
             # Get the daily return for each symbol in the portfolio
             daily_returns = {
@@ -273,11 +332,17 @@ class AdvancedMLTrader:
 
             # Skip if there is any missing return for the symbol on the current date
             if any(pd.isna(r) for r in daily_returns.values()):
+                print(f"Missing return data on {date}, skipping. Returns: {daily_returns}")
                 continue  # Skip this date if returns are missing
 
             # Compute portfolio return as the weighted sum of individual returns
             port_return = sum(weights[symbol] * daily_returns[symbol] for symbol in self.stock_symbols)
             weighted_returns.append(port_return)
+
+        # Check if weighted_returns is still empty (i.e., no valid returns computed)
+        if not weighted_returns:
+            print(f"No valid weighted returns for the period {start} to {end}. Returning empty series.")
+            return pd.Series(dtype=float)
 
         # Convert to pandas Series for easier calculation of rolling mean and std
         returns_series = pd.Series(weighted_returns, index=dates)
@@ -291,7 +356,7 @@ class AdvancedMLTrader:
 
 # could make optimal_cluster_params use ML to compute best ones.
 # Actually, could do this for all parameters. for example, rolling windows, garch parameters, risk aversion, etc...
-    def optimal_cluster_params(self, n_components_slider_range=(2, 4, 1), n_regimes_slider_range=(2, 4, 1), rolling_window_slider_range=(30, 120, 30)):
+    def optimal_cluster_params(self, data = None, n_components_slider_range=(2, 2, 1), n_regimes_slider_range=(2, 2, 1), rolling_window_slider_range=(30, 30, 30)):
         """
         Optimize the parameters for n_components, n_regimes, rolling_window, and weighting_options
         based on the Maximum Likelihood Estimate (MLE).
@@ -304,7 +369,7 @@ class AdvancedMLTrader:
         Returns:
             dict: Optimal parameters {'n_components': [...], 'n_regimes': [...], 'rolling_window': [...], 'weighting_options': [...]}.
         """
-        print("Running optimal_params...")  # <-- Add this to confirm the function is called
+        print("Running optimal_params...")
         time.sleep(4)
         # Create ranges based on slider inputs
         n_components_range = list(range(n_components_slider_range[0], n_components_slider_range[1] + 1, n_components_slider_range[2]))
@@ -334,6 +399,7 @@ class AdvancedMLTrader:
                         try:
                             # Run cluster_analysis with the current parameter combination
                             averaged_features, eig_vecs, eig_vals, X_pca = self.cluster_analysis(
+                                data = data,
                                 n_components=n_components,
                                 n_regimes=n_regimes,
                                 rolling_window = rolling_window,
