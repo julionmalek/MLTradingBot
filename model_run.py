@@ -105,21 +105,48 @@ strategy = AdvancedMLTrader(start = start,
                                         "risk aversion": 1.0}, # Start with 5000$
                             debug=True)  # Enable debug mode
 
-# --- 4. Train model ---
-# Generate features
-features, _, targets = strategy.generate_features(compute_garch=True, return_raw_targets = True)
+# --- 4. Run model for each date ---
+
+# Then generate predictions
+
+for current_date in pd.date_range(start, end, freq='B'):  # 'B' = business day
+
+    # 1. Get relevant data up to current_date
+    data_slice = data_source[data_source.index <= current_date] 
+
+    # 2. Run clustering
+    # Use the best params from optimization
+    best_params = strategy.optimal_cluster_params(n_components_slider_range=(2, 2, 1), n_regimes_slider_range=(2, 2, 1), rolling_window_slider_range=(30, 90, 30))
+    n_components, n_regimes, rolling_window, weighting_options = best_params['n_components'], best_params['n_regimes'], best_params['rolling_window'], best_params['weighting_options']
+
+    # Load and rerun the clustering logic with current parameters
+    averaged_features, eig_vecs, eig_vals, X_pca, combined = strategy.cluster_analysis(n_components = n_components,
+                                                                                    n_regimes = n_regimes,
+                                                                                    rolling_window = rolling_window,
+                                                                                    return_combined = True,
+                                                                                    weighting_options = weighting_options
+                                                                                    )
+
+    regimes = averaged_features['regime']
+
+    # 3. Generate features and targets, extract predictions
+    features, _, targets = strategy.generate_features(data = data_slice, regime_labels = regimes, compute_garch = True, compute_daily_sharpe = True, return_raw_targets = True)
+    actual_returns, actual_volatility = targets['daily_return'], targets['volatility_5d']
+    return_predictions, volatility_predictions = features, features['garch_vol']
+
+    # 4. Evaluate the prediction we made last period
+    if current_date != start:
+        last_day = current_date - pd.Timedelta(days=1)
+        strategy.evaluate_performance(actual_returns[0], actual_volatility[0], last_day)  # Only compare last day's predictions
 
 
-# Extract target variables
-returns, volatility = targets['daily_return'], targets['volatility_5d']
+    # 5. Predict next-period return/volatility
+    strategy.predict_daily_return(features, targets)
+    strategy.forecast_garch_volatility(start = start, end = current_date, returns = actual_returns)
 
-# Train model
-print(f"Number of observations: {len(features)}")
+    # 6. Update portfolio weights
+    strategy.adjust_portfolio_weights(current_date)
 
-strategy.predict_and_update(features = features.drop(columns = ['daily_return', 'volatility_5d']),
-                                     targets = pd.concat([returns, volatility], axis=1))
-
-print(f"Trained on {len(strategy.predictions)} time points.")
 
 # --- 5. Launch the dashboard ---
 run_dashboard(strategy)

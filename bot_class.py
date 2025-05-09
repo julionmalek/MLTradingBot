@@ -66,7 +66,8 @@ class AdvancedMLTrader:
         self.weight_history = {}  # Historical weights (optional)
         self.portfolio_returns = []  # Daily portfolio returns
         self.portfolio_values = []  # Daily total value of portfolio
-        self.daily_predictions = {}  # {date: {symbol: predicted_return}}
+        self.return_predictions = {}  # {date: {symbol: predicted_return}}
+        self.volatility_predictions = {}  # {date: {symbol: predicted_return}}
         self.prediction_history = {}  # Keep full history
         self.sharpe_ratios = []  # Sharpe ratios over time
         self.risk_aversion = parameters.get("risk aversion", 1.0)
@@ -153,7 +154,7 @@ class AdvancedMLTrader:
         if regime_labels is not None:
             averaged_features['regime'] = regime_labels
 
-        # Add GARCH volatility if already computed
+        # Add GARCH volatility
         if garch_vols is not None:
             averaged_features['garch_vol'] = garch_vols
         elif compute_garch:
@@ -184,8 +185,7 @@ class AdvancedMLTrader:
             garch_forecasts = garch_forecasts.reindex(averaged_features.index) # Realign index just in case, gets NaN if no forecast exists
             averaged_features['garch_vol'] = garch_forecasts            
         
-         # Add daily Sharpe if available
-        
+         # Add daily Sharpe
         if daily_sharpes is not None:
             averaged_features['daily_sharpe'] = daily_sharpes
         elif compute_daily_sharpe:
@@ -289,7 +289,6 @@ class AdvancedMLTrader:
 
         return sharpe_series
 
-
 # could make optimal_cluster_params use ML to compute best ones.
 # Actually, could do this for all parameters. for example, rolling windows, garch parameters, risk aversion, etc...
     def optimal_cluster_params(self, n_components_slider_range=(2, 4, 1), n_regimes_slider_range=(2, 4, 1), rolling_window_slider_range=(30, 120, 30)):
@@ -370,7 +369,7 @@ class AdvancedMLTrader:
         print('\n')
         return best_params
 
-    def cluster_analysis(self, n_components=3, n_regimes=3, rolling_window = 90, weighting_options=None, regime_labels=None, garch_vols=None, return_combined=False, return_raw_targets = False):
+    def cluster_analysis(self, data = None, n_components=3, n_regimes=3, rolling_window = 90, weighting_options=None, regime_labels=None, garch_vols=None, return_combined=False, return_raw_targets = False):
         """
         Run PCA with optional weighting, HMM clustering, and return regime information.
 
@@ -393,16 +392,16 @@ class AdvancedMLTrader:
             }
 
         if return_combined and return_raw_targets:        
-            averaged_features, scaler, combined, raw_targets = self.generate_features(data = self.cluster_training_data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined, return_raw_targets = return_raw_targets)
+            averaged_features, scaler, combined, raw_targets = self.generate_features(data = data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined, return_raw_targets = return_raw_targets)
 
         elif return_combined and not return_raw_targets:
-            averaged_features, scaler, combined = self.generate_features(data = self.cluster_training_data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined)
+            averaged_features, scaler, combined = self.generate_features(data = data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined)
 
         elif return_raw_targets and not return_combined:
-            averaged_features, scaler, raw_targets = self.generate_features(data = self.cluster_training_data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined)
+            averaged_features, scaler, raw_targets = self.generate_features(data = data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined)
 
         else:
-            averaged_features, scaler = self.generate_features(data = self.cluster_training_data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined)
+            averaged_features, scaler = self.generate_features(data = data, regime_labels = regime_labels, garch_vols = garch_vols, rolling_window = rolling_window, return_combined = return_combined)
         
         X_scaled = averaged_features.values
 
@@ -433,7 +432,6 @@ class AdvancedMLTrader:
         eig_vals, eig_vecs = np.linalg.eigh(cov_matrix)
         #print("eig_vecs shape:", eig_vecs.shape)  # Should be (6, n_components), where n_components = 2
         
-
         idx = np.argsort(eig_vals)[::-1]
         eig_vecs = eig_vecs[:, idx[:n_components]]
         X_pca = mean_centered @ eig_vecs
@@ -489,44 +487,25 @@ class AdvancedMLTrader:
             print(f"GARCH forecast failed for range {start} to {end}: {e}")
             return None
 
-
-
-    def compute_sharpe_snapshot(self, date, risk_free_rate=0.0):
+    def compute_sharpe_snapshot(self, returns: pd.Series, risk_free_rate=0.0):
         """
-        Compute a single-day Sharpe ratio snapshot for a specific date.
-        Used for immediate feedback in reinforcement learning or tracking.
+        Compute Sharpe ratio from a recent series of *portfolio* returns.
+        Used to scale return adjustments in Q-learning.
         """
-        if date not in self.portfolio_weights:
-            return None
+        excess_returns = returns - risk_free_rate
+        mean_return = excess_returns.mean()
+        std_return = excess_returns.std()
 
-        weights = self.portfolio_weights[date]
-        daily_returns = {
-            symbol: self.data_source[symbol].df['close'].pct_change().get(date)
-            for symbol in self.stock_symbols
-        }
+        if std_return == 0 or np.isnan(std_return):
+            return 0.0
 
-        if any(pd.isna(ret) for ret in daily_returns.values()):
-            return None
+        return mean_return / std_return
 
-        port_return = sum(weights[symbol] * daily_returns[symbol] for symbol in self.stock_symbols)
-        port_std = np.std(list(daily_returns.values()))
-        sharpe = (port_return - risk_free_rate) / port_std if port_std > 0 else 0
-
-        self.portfolio_returns.append(port_return)
-        self.sharpe_ratios.append(sharpe)
-
-        return sharpe
-
-    def predict_returns(self, features, targets, min_train_size=10):
+    def predict_daily_return(self, features, targets, min_train_size=10):
         """
-        Expanding window prediction using Q-learning inspired reward updates
+        Expanding window prediction using Q-learning-inspired reward updates
         with polynomial feature expansion and Bayesian Ridge regression.
-        Sharpe ratio is used to scale return adjustment only (not volatility).
-
-        Parameters:
-            features (DataFrame): Feature matrix.
-            targets (DataFrame): DataFrame with columns ['returns', 'volatility'].
-            min_train_size (int): Minimum number of observations required to start predicting.
+        Volatility is not predicted here; it's used as a feature.
         """
         poly = PolynomialFeatures(degree=2, include_bias=False)
         features_poly = poly.fit_transform(features)
@@ -534,48 +513,42 @@ class AdvancedMLTrader:
 
         for t in range(min_train_size, n_obs):
             X_train = features_poly[:t+1]
-            y_train = targets.iloc[:t+1].copy()
+            y_train = targets['returns'].iloc[:t+1].copy()
             X_test = features_poly[[t]]
-            y_true = targets.iloc[t]
+            y_true = targets['returns'].iloc[t]
 
-            if np.isnan(X_test).any() or y_true.isnull().values.any():
+            if np.isnan(X_test).any() or pd.isna(y_true):
                 continue
 
-            model = MultiOutputRegressor(BayesianRidge())
-            model.fit(features_poly[:t], targets.iloc[:t])
+            model = BayesianRidge()
+            model.fit(X_train[:-1], y_train[:-1])  # train only on t-1 days
             y_pred = model.predict(X_test)[0]
 
-            if np.isnan(y_pred).any():
+            if np.isnan(y_pred):
                 continue
 
-            # === Sharpe-based reward scaling for return only ===
-            recent_returns = targets['returns'].iloc[max(0, t - 19):t + 1]
+            # === Sharpe-based reward scaling ===
+            recent_returns = y_train.iloc[max(0, t - 19):t + 1]
             sharpe_reward = self.compute_sharpe_snapshot(recent_returns)
+            sharpe_reward = 1.0 if not np.isfinite(sharpe_reward) else np.clip(sharpe_reward, 0.0, 3.0)
 
-            if not np.isfinite(sharpe_reward):
-                sharpe_reward = 1.0  # fallback to neutral scaling
+            # Q-learning-style adjustment
+            delta_return = y_true - y_pred
+            adjusted_return = y_pred + self.learning_rate * (y_true + self.q_gamma * delta_return * sharpe_reward - y_pred)
 
-            sharpe_reward = np.clip(sharpe_reward, 0.0, 3.0)  # avoid extreme scaling
-
-            # Q-learning update:
-            delta_return = y_true[0] - y_pred[0]
-            adjusted_return = y_pred[0] + self.learning_rate * (y_true[0] + self.q_gamma * delta_return * sharpe_reward - y_pred[0])
-
-            # Keep volatility prediction unchanged
-            adjusted_volatility = y_true[1]
-
-            # Apply the adjustment
-            y_train.iloc[-1] = [adjusted_return, adjusted_volatility]
-
-            model = MultiOutputRegressor(BayesianRidge())
+            # Update final model with adjusted return
+            y_train.iloc[-1] = adjusted_return
             model.fit(X_train, y_train)
 
-            self.predictions.append(y_pred)
+            self.predictions.append(adjusted_return)
             self.dates.append(features.index[t])
             self.trained_models[features.index[t]] = model
             self.last_model = model
 
-            self.daily_predictions[features.index[t]] = dict(zip(self.stock_symbols, [adjusted_return] * len(self.stock_symbols)))
+            # Portfolio-level prediction — same for all symbols
+            self.daily_predictions[features.index[t]] = {
+                symbol: adjusted_return for symbol in self.stock_symbols
+            }
 
     def adjust_portfolio_weights(self, current_date):
         if current_date not in self.daily_predictions:
@@ -603,10 +576,14 @@ class AdvancedMLTrader:
 
         self.portfolio_weights[current_date] = dict(zip(self.stock_symbols, adjusted_weights))
 
-
-    def evaluate_performance(self, actual_returns, actual_volatility):
-        predicted_returns = [pred[0] for pred in self.predictions]
-        predicted_volatility = [pred[1] for pred in self.predictions]
+    def evaluate_performance(self, actual_returns, actual_volatility, last_day):
+        """
+        Evaluate the model's performance based on the previous day's predictions and current day's actuals.
+        """
+        # Assuming that self.predictions contains predictions for the last day.
+        # Extract the previous day's predictions based on the 'last_day' passed to this method.
+        predicted_returns = self.predictions[last_day][0]  # 0 for returns
+        predicted_volatility = self.predictions[last_day][1]  # 1 for volatility
 
         n = len(actual_returns)
         if n != len(predicted_returns):
@@ -630,7 +607,6 @@ class AdvancedMLTrader:
         return mse_ret, mse_vol, r2_ret, r2_vol, avg_sharpe
 
 
- 
 # Predict and update (old)
 
     '''
