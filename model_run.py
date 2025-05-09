@@ -112,27 +112,33 @@ strategy = AdvancedMLTrader(start = start,
 for current_date in pd.date_range(start, end, freq='B'):  # 'B' = business day
 
     # 1. Get relevant data up to current_date
-    data_slice = data_source[data_source.index <= current_date] 
+    data_slice = {
+        symbol: bars.df[bars.df.index <= current_date]
+        for symbol, bars in data_source.items()
+    }
 
     # 2. Run clustering
     # Use the best params from optimization
-    best_params = strategy.optimal_cluster_params(n_components_slider_range=(2, 2, 1), n_regimes_slider_range=(2, 2, 1), rolling_window_slider_range=(30, 90, 30))
-    n_components, n_regimes, rolling_window, weighting_options = best_params['n_components'], best_params['n_regimes'], best_params['rolling_window'], best_params['weighting_options']
+    #best_params = strategy.optimal_cluster_params(data = data_slice, n_components_slider_range=(2, 2, 1), n_regimes_slider_range=(2, 2, 1), rolling_window_slider_range=(30, 90, 30))
+    #n_components, n_regimes, rolling_window, weighting_options = best_params['n_components'], best_params['n_regimes'], best_params['rolling_window'], best_params['weighting_options']
+    n_components, n_regimes, rolling_window, weighting_options = 2, 2, 90, {'time': False, 'volatility': False, 'portfolio': True}
+
 
     # Load and rerun the clustering logic with current parameters
-    averaged_features, eig_vecs, eig_vals, X_pca, combined = strategy.cluster_analysis(n_components = n_components,
-                                                                                    n_regimes = n_regimes,
-                                                                                    rolling_window = rolling_window,
-                                                                                    return_combined = True,
-                                                                                    weighting_options = weighting_options
-                                                                                    )
+    averaged_features, eig_vecs, eig_vals, X_pca, combined = strategy.cluster_analysis(data = data_slice,
+                                                                                       n_components = n_components,
+                                                                                       n_regimes = n_regimes,
+                                                                                       rolling_window = rolling_window,
+                                                                                       return_combined = True,
+                                                                                       weighting_options = weighting_options
+                                                                                       )
 
     regimes = averaged_features['regime']
 
     # 3. Generate features and targets, extract predictions
     features, _, targets = strategy.generate_features(data = data_slice, regime_labels = regimes, compute_garch = True, compute_daily_sharpe = True, return_raw_targets = True)
     actual_returns, actual_volatility = targets['daily_return'], targets['volatility_5d']
-    return_predictions, volatility_predictions = features, features['garch_vol']
+    return_predictions, volatility_predictions = features['daily_return'], features['garch_vol']
 
     # 4. Evaluate the prediction we made last period
     if current_date != start:
